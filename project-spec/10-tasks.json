@@ -1,0 +1,980 @@
+{
+  "meta": {
+    "artifact": "tasks",
+    "version": "2.0.0",
+    "status": "draft",
+    "ordering": "dependency-first",
+    "notes": [
+      "Each feature task is atomic for a single Vibe Coding session (~50-100 LOC).",
+      "Titles prefixed with [P] are parallelizable once their dependencies are satisfied.",
+      "Every feature task contains a required Verification sub-task."
+    ]
+  },
+  "tasks": [
+    {
+      "id": "VP-0001",
+      "phase": "Phase 0: Workspace & Infra",
+      "title": "Initialize Turborepo and npm workspaces",
+      "description": "Create root workspace configuration and baseline package manifests for apps and packages.",
+      "acceptance_criteria": [
+        "Root workspace recognizes `apps/*` and `packages/*`.",
+        "Running workspace install succeeds without unresolved local package references.",
+        "Base folder structure exists for `apps/web` and `packages/*` targets."
+      ],
+      "dependencies": [],
+      "affected_packages": [
+        "workspace-root"
+      ],
+      "verification_subtask": {
+        "id": "VP-0001-V",
+        "title": "Verification: Validate workspace bootstrap",
+        "description": "Run install and workspace listing commands to confirm monorepo discovery.",
+        "acceptance_criteria": [
+          "Workspace install completes successfully.",
+          "Workspace command lists all intended packages.",
+          "No missing-workspace warnings are shown."
+        ],
+        "dependencies": [
+          "VP-0001"
+        ],
+        "affected_packages": [
+          "workspace-root"
+        ]
+      }
+    },
+    {
+      "id": "VP-0002",
+      "phase": "Phase 0: Workspace & Infra",
+      "title": "Configure `turbo.json` task pipeline",
+      "description": "Define build, lint, test, and typecheck pipelines with task outputs and cache boundaries.",
+      "acceptance_criteria": [
+        "Turbo pipeline includes build, lint, typecheck, and test tasks.",
+        "Task dependencies align with package graph.",
+        "Local run executes tasks in expected order."
+      ],
+      "dependencies": [
+        "VP-0001"
+      ],
+      "affected_packages": [
+        "workspace-root"
+      ],
+      "verification_subtask": {
+        "id": "VP-0002-V",
+        "title": "Verification: Run Turbo dry pipeline",
+        "description": "Execute turbo task graph command and verify dependency ordering.",
+        "acceptance_criteria": [
+          "Turbo graph resolves without cycle errors.",
+          "Root and package tasks are discovered.",
+          "Cache/output settings are applied to configured tasks."
+        ],
+        "dependencies": [
+          "VP-0002"
+        ],
+        "affected_packages": [
+          "workspace-root"
+        ]
+      }
+    },
+    {
+      "id": "VP-0003",
+      "phase": "Phase 0: Workspace & Infra",
+      "title": "[P] Configure root `tsconfig.json` for monorepo paths",
+      "description": "Add strict compiler options and shared path aliases for all workspace packages.",
+      "acceptance_criteria": [
+        "Root TypeScript config enables strict mode.",
+        "Path aliases resolve `@vibe/*` package imports.",
+        "Child package tsconfig files can extend the root config."
+      ],
+      "dependencies": [
+        "VP-0001"
+      ],
+      "affected_packages": [
+        "workspace-root"
+      ],
+      "verification_subtask": {
+        "id": "VP-0003-V",
+        "title": "Verification: Run TypeScript project references check",
+        "description": "Execute a root typecheck and confirm alias resolution across packages.",
+        "acceptance_criteria": [
+          "TypeScript resolves workspace path aliases.",
+          "No config inheritance errors appear.",
+          "Typecheck exits successfully for configured projects."
+        ],
+        "dependencies": [
+          "VP-0003"
+        ],
+        "affected_packages": [
+          "workspace-root"
+        ]
+      }
+    },
+    {
+      "id": "VP-0004",
+      "phase": "Phase 0: Workspace & Infra",
+      "title": "[P] Create `@vibe/ui` with shared Tailwind preset",
+      "description": "Set up `@vibe/ui` package, shared design tokens, and reusable Tailwind preset consumed by app packages.",
+      "acceptance_criteria": [
+        "`@vibe/ui` package exports UI primitives and style entrypoints.",
+        "Shared Tailwind configuration is reusable from `apps/web`.",
+        "A sample styled component renders with shared tokens."
+      ],
+      "dependencies": [
+        "VP-0001"
+      ],
+      "affected_packages": [
+        "@vibe/ui",
+        "apps/web (shared/ui)"
+      ],
+      "verification_subtask": {
+        "id": "VP-0004-V",
+        "title": "Verification: Build `@vibe/ui` package",
+        "description": "Run package build/typecheck and confirm shared styles compile.",
+        "acceptance_criteria": [
+          "Package build succeeds.",
+          "Tailwind preset is importable from `apps/web`.",
+          "No unresolved style/token imports remain."
+        ],
+        "dependencies": [
+          "VP-0004"
+        ],
+        "affected_packages": [
+          "@vibe/ui",
+          "apps/web (shared/ui)"
+        ]
+      }
+    },
+    {
+      "id": "VP-0005",
+      "phase": "Phase 0: Workspace & Infra",
+      "title": "Integrate Shadcn/ui into `apps/web` via `@vibe/ui`",
+      "description": "Configure Shadcn/ui component generation and route all shared components through `@vibe/ui` exports.",
+      "acceptance_criteria": [
+        "Shadcn/ui components are generated and wrapped in `@vibe/ui`.",
+        "`apps/web` imports shared UI from `@vibe/ui` rather than local duplicates.",
+        "Theme tokens and utility classes are consistent across app screens."
+      ],
+      "dependencies": [
+        "VP-0003",
+        "VP-0004"
+      ],
+      "affected_packages": [
+        "@vibe/ui",
+        "apps/web (shared/ui)"
+      ],
+      "verification_subtask": {
+        "id": "VP-0005-V",
+        "title": "Verification: Render Shadcn component in app",
+        "description": "Run web app locally and confirm shared Shadcn component styling.",
+        "acceptance_criteria": [
+          "Web app starts without component import errors.",
+          "Rendered shared component matches Tailwind token usage.",
+          "No duplicate local UI component paths remain in app imports."
+        ],
+        "dependencies": [
+          "VP-0005"
+        ],
+        "affected_packages": [
+          "@vibe/ui",
+          "apps/web (shared/ui)"
+        ]
+      }
+    },
+    {
+      "id": "VP-0101",
+      "phase": "Phase 1: Core Foundation",
+      "title": "Implement `@vibe/schema` core Zod contracts from PRD",
+      "description": "Define `BriefSchema`, `PRDSchema`, `TaskTreeSchema`, `DesignMapSchema`, and shared enums aligned to PRD/acceptance criteria.",
+      "acceptance_criteria": [
+        "All required schema roots are implemented in `@vibe/schema`.",
+        "Enums match documented status/category values from spec.",
+        "Schemas parse representative valid fixtures and reject invalid fixtures."
+      ],
+      "dependencies": [
+        "VP-0003"
+      ],
+      "affected_packages": [
+        "@vibe/schema"
+      ],
+      "verification_subtask": {
+        "id": "VP-0101-V",
+        "title": "Verification: Run schema unit tests",
+        "description": "Execute schema test suite (Vitest or equivalent) for parse success/failure fixtures.",
+        "acceptance_criteria": [
+          "Schema tests pass for valid fixtures.",
+          "Negative fixtures fail with expected messages.",
+          "Coverage includes all top-level schema exports."
+        ],
+        "dependencies": [
+          "VP-0101"
+        ],
+        "affected_packages": [
+          "@vibe/schema"
+        ]
+      }
+    },
+    {
+      "id": "VP-0102",
+      "phase": "Phase 1: Core Foundation",
+      "title": "Publish schema package entrypoints and validation helpers",
+      "description": "Export inferred TS types and helper validators so all generators validate outputs before persistence.",
+      "acceptance_criteria": [
+        "`@vibe/schema` exports both Zod schemas and inferred TS types.",
+        "Validation helpers return structured error objects for UI/AI flows.",
+        "Downstream packages can import helpers without circular dependencies."
+      ],
+      "dependencies": [
+        "VP-0101"
+      ],
+      "affected_packages": [
+        "@vibe/schema"
+      ],
+      "verification_subtask": {
+        "id": "VP-0102-V",
+        "title": "Verification: Typecheck consumer imports",
+        "description": "Typecheck a sample consumer in another package using exported schema helpers.",
+        "acceptance_criteria": [
+          "Consumer import path resolves without local hacks.",
+          "Inferred types are usable in consumer package code.",
+          "Build output exposes expected public API surface."
+        ],
+        "dependencies": [
+          "VP-0102"
+        ],
+        "affected_packages": [
+          "@vibe/schema"
+        ]
+      }
+    },
+    {
+      "id": "VP-0103",
+      "phase": "Phase 1: Core Foundation",
+      "title": "[P] Implement `@vibe/database` Supabase client and env guards",
+      "description": "Create typed Supabase server/client initialization with runtime environment validation.",
+      "acceptance_criteria": [
+        "Supabase URL/key env vars are validated at startup.",
+        "Reusable typed client factory exists for server-side usage.",
+        "Connection helper can be imported by repositories and API routes."
+      ],
+      "dependencies": [
+        "VP-0003"
+      ],
+      "affected_packages": [
+        "@vibe/database"
+      ],
+      "verification_subtask": {
+        "id": "VP-0103-V",
+        "title": "Verification: Check Supabase client initialization",
+        "description": "Run a lightweight connectivity check against configured Supabase project.",
+        "acceptance_criteria": [
+          "Env validation fails fast on missing variables.",
+          "Valid env configuration creates a client successfully.",
+          "Connectivity check returns expected status response."
+        ],
+        "dependencies": [
+          "VP-0103"
+        ],
+        "affected_packages": [
+          "@vibe/database"
+        ]
+      }
+    },
+    {
+      "id": "VP-0104",
+      "phase": "Phase 1: Core Foundation",
+      "title": "Create initial SQL migrations for core pipeline tables",
+      "description": "Add migration scripts for `projects`, `project_sessions`, `clarifications`, `artifacts`, `tasks`, `design_nodes`, and `design_task_links`.",
+      "acceptance_criteria": [
+        "Migration scripts create all required tables and constraints.",
+        "Enum/check constraints reflect spec-defined status values.",
+        "Migration can be applied cleanly to an empty database."
+      ],
+      "dependencies": [
+        "VP-0103"
+      ],
+      "affected_packages": [
+        "@vibe/database"
+      ],
+      "verification_subtask": {
+        "id": "VP-0104-V",
+        "title": "Verification: Apply and inspect migration",
+        "description": "Run migration and verify table presence plus critical constraints.",
+        "acceptance_criteria": [
+          "All expected tables are present after migration.",
+          "Primary/foreign keys and unique constraints are created.",
+          "Rollback/reapply works without drift errors."
+        ],
+        "dependencies": [
+          "VP-0104"
+        ],
+        "affected_packages": [
+          "@vibe/database"
+        ]
+      }
+    },
+    {
+      "id": "VP-0105",
+      "phase": "Phase 1: Core Foundation",
+      "title": "[P] Generate DB types and add typed repository modules",
+      "description": "Generate TypeScript database types and implement repositories for core entities with strict DTO mapping.",
+      "acceptance_criteria": [
+        "Generated DB types are available in `@vibe/database`.",
+        "Repositories exist for projects, sessions, clarifications, artifacts, and tasks.",
+        "Repository methods return typed domain objects aligned with schema contracts."
+      ],
+      "dependencies": [
+        "VP-0104",
+        "VP-0102"
+      ],
+      "affected_packages": [
+        "@vibe/database",
+        "@vibe/schema"
+      ],
+      "verification_subtask": {
+        "id": "VP-0105-V",
+        "title": "Verification: Run repository integration checks",
+        "description": "Execute targeted repository tests against a migrated database.",
+        "acceptance_criteria": [
+          "CRUD operations succeed for each core repository.",
+          "Returned types satisfy TypeScript checks without casts.",
+          "Repository writes preserve schema-required fields."
+        ],
+        "dependencies": [
+          "VP-0105"
+        ],
+        "affected_packages": [
+          "@vibe/database",
+          "@vibe/schema"
+        ]
+      }
+    },
+    {
+      "id": "VP-0201",
+      "phase": "Phase 2: LangGraph Orchestration",
+      "title": "Scaffold `@vibe/ai` LangGraph state machine core",
+      "description": "Create graph state model, node contracts, and reducer wiring for staged pipeline execution.",
+      "acceptance_criteria": [
+        "Graph state shape includes stage, status, node, and error metadata.",
+        "Node contract interface is shared for all pipeline nodes.",
+        "State reducer supports deterministic stage transitions."
+      ],
+      "dependencies": [
+        "VP-0102",
+        "VP-0105"
+      ],
+      "affected_packages": [
+        "@vibe/ai",
+        "@vibe/schema"
+      ],
+      "verification_subtask": {
+        "id": "VP-0201-V",
+        "title": "Verification: Execute graph bootstrap test",
+        "description": "Run a minimal graph invocation and assert initial state transitions.",
+        "acceptance_criteria": [
+          "Graph initializes with expected default state.",
+          "Reducer transitions through at least one node.",
+          "Typecheck passes for node contract implementations."
+        ],
+        "dependencies": [
+          "VP-0201"
+        ],
+        "affected_packages": [
+          "@vibe/ai",
+          "@vibe/schema"
+        ]
+      }
+    },
+    {
+      "id": "VP-0202",
+      "phase": "Phase 2: LangGraph Orchestration",
+      "title": "Implement persisted checkpoints to `project_sessions.state_json`",
+      "description": "Persist and reload graph checkpoints to support interruption, resume, and failure recovery.",
+      "acceptance_criteria": [
+        "Graph writes checkpoint payloads to `project_sessions.state_json`.",
+        "Resume path restores state from latest checkpoint.",
+        "Failure metadata is persisted in `last_error` when node retries are exhausted."
+      ],
+      "dependencies": [
+        "VP-0201"
+      ],
+      "affected_packages": [
+        "@vibe/ai",
+        "@vibe/database"
+      ],
+      "verification_subtask": {
+        "id": "VP-0202-V",
+        "title": "Verification: Simulate interrupt and resume",
+        "description": "Run graph with an intentional pause and confirm successful continuation.",
+        "acceptance_criteria": [
+          "Interrupted run updates `graph_status` appropriately.",
+          "Resume operation continues from stored checkpoint.",
+          "State snapshots remain valid JSON across writes."
+        ],
+        "dependencies": [
+          "VP-0202"
+        ],
+        "affected_packages": [
+          "@vibe/ai",
+          "@vibe/database"
+        ]
+      }
+    },
+    {
+      "id": "VP-0203",
+      "phase": "Phase 2: LangGraph Orchestration",
+      "title": "[P] Implement `IntakeNormalizer` node",
+      "description": "Build node logic that converts raw intake input into `BriefSchema` and stores versioned brief artifact.",
+      "acceptance_criteria": [
+        "Node output validates against `BriefSchema`.",
+        "Validation errors return structured feedback payload.",
+        "Successful output persists a new brief artifact version."
+      ],
+      "dependencies": [
+        "VP-0201",
+        "VP-0102",
+        "VP-0105"
+      ],
+      "affected_packages": [
+        "@vibe/ai",
+        "@vibe/schema",
+        "@vibe/database"
+      ],
+      "verification_subtask": {
+        "id": "VP-0203-V",
+        "title": "Verification: Run IntakeNormalizer node test",
+        "description": "Execute node test with valid and invalid intake fixtures.",
+        "acceptance_criteria": [
+          "Valid fixture produces persisted brief artifact.",
+          "Invalid fixture returns schema error details.",
+          "Node retry path follows configured policy."
+        ],
+        "dependencies": [
+          "VP-0203"
+        ],
+        "affected_packages": [
+          "@vibe/ai",
+          "@vibe/schema",
+          "@vibe/database"
+        ]
+      }
+    },
+    {
+      "id": "VP-0204",
+      "phase": "Phase 2: LangGraph Orchestration",
+      "title": "[P] Implement `GapDetector` node",
+      "description": "Build node logic that identifies unresolved requirement gaps and emits ranked clarification candidates.",
+      "acceptance_criteria": [
+        "Gap categories include roles, NFR, edge cases, integrations, and security.",
+        "Node output includes priority and source for each gap.",
+        "Critical gaps route flow toward clarification generation path."
+      ],
+      "dependencies": [
+        "VP-0201",
+        "VP-0102",
+        "VP-0105"
+      ],
+      "affected_packages": [
+        "@vibe/ai",
+        "@vibe/schema",
+        "@vibe/database"
+      ],
+      "verification_subtask": {
+        "id": "VP-0204-V",
+        "title": "Verification: Run GapDetector node test",
+        "description": "Execute node test to confirm gap ranking and stage routing behavior.",
+        "acceptance_criteria": [
+          "Returned gaps are categorized and prioritized.",
+          "No-gap scenario advances to PRD stage path.",
+          "Critical-gap scenario triggers clarification branch."
+        ],
+        "dependencies": [
+          "VP-0204"
+        ],
+        "affected_packages": [
+          "@vibe/ai",
+          "@vibe/schema",
+          "@vibe/database"
+        ]
+      }
+    },
+    {
+      "id": "VP-0205",
+      "phase": "Phase 2: LangGraph Orchestration",
+      "title": "Wire Intake + GapDetector transitions, retries, and interrupt/resume",
+      "description": "Connect node sequence with retry policy and user-input interruption semantics in the graph executor.",
+      "acceptance_criteria": [
+        "Graph transitions from Intake to GapDetector on valid brief output.",
+        "Retry policy enforces max two retries before failure state.",
+        "Interrupted-for-input status can be resumed to continue pipeline."
+      ],
+      "dependencies": [
+        "VP-0202",
+        "VP-0203",
+        "VP-0204"
+      ],
+      "affected_packages": [
+        "@vibe/ai",
+        "@vibe/database"
+      ],
+      "verification_subtask": {
+        "id": "VP-0205-V",
+        "title": "Verification: Execute orchestration flow test",
+        "description": "Run integration test covering success, retry, and interrupted branches.",
+        "acceptance_criteria": [
+          "Success branch reaches expected downstream stage.",
+          "Failure branch persists `last_error` after retry cap.",
+          "Interrupted branch can resume with same session id."
+        ],
+        "dependencies": [
+          "VP-0205"
+        ],
+        "affected_packages": [
+          "@vibe/ai",
+          "@vibe/database"
+        ]
+      }
+    },
+    {
+      "id": "VP-0301",
+      "phase": "Phase 3: The Dashboard (App)",
+      "title": "Create `apps/web` FSD skeleton for app/processes/widgets/features/entities/shared",
+      "description": "Set up folder boundaries and baseline contracts to enforce Feature-Sliced Design import direction.",
+      "acceptance_criteria": [
+        "All six FSD layers exist in `apps/web/src`.",
+        "Import boundaries are documented and enforceable by lint/config.",
+        "Route shell references layers according to FSD direction."
+      ],
+      "dependencies": [
+        "VP-0005"
+      ],
+      "affected_packages": [
+        "apps/web (app)",
+        "apps/web (processes)",
+        "apps/web (widgets)",
+        "apps/web (features)",
+        "apps/web (entities)",
+        "apps/web (shared)"
+      ],
+      "verification_subtask": {
+        "id": "VP-0301-V",
+        "title": "Verification: Validate FSD boundary rules",
+        "description": "Run lint/static checks to confirm disallowed cross-layer imports are blocked.",
+        "acceptance_criteria": [
+          "Boundary checks pass for valid imports.",
+          "Intentional invalid import is flagged by tooling.",
+          "App builds with layer-compliant wiring."
+        ],
+        "dependencies": [
+          "VP-0301"
+        ],
+        "affected_packages": [
+          "apps/web"
+        ]
+      }
+    },
+    {
+      "id": "VP-0302",
+      "phase": "Phase 3: The Dashboard (App)",
+      "title": "Build Project Intake form in `features` layer",
+      "description": "Implement intake form UI, validation, and submit action under `apps/web/src/features` with no widget/process leakage.",
+      "acceptance_criteria": [
+        "Feature form captures required intake fields.",
+        "Validation feedback is shown inline for invalid entries.",
+        "Submission persists project + brief kickoff data through approved APIs."
+      ],
+      "dependencies": [
+        "VP-0301",
+        "VP-0105",
+        "VP-0203"
+      ],
+      "affected_packages": [
+        "apps/web (features/intake)",
+        "apps/web (entities/project)",
+        "@vibe/schema"
+      ],
+      "verification_subtask": {
+        "id": "VP-0302-V",
+        "title": "Verification: Run intake feature tests",
+        "description": "Execute component/action tests for form validation and submit flow.",
+        "acceptance_criteria": [
+          "Required field validation test passes.",
+          "Successful submit triggers expected persistence call.",
+          "Error path test shows actionable feedback state."
+        ],
+        "dependencies": [
+          "VP-0302"
+        ],
+        "affected_packages": [
+          "apps/web (features/intake)"
+        ]
+      }
+    },
+    {
+      "id": "VP-0303",
+      "phase": "Phase 3: The Dashboard (App)",
+      "title": "Build Clarification UI in `widgets` layer with feature actions",
+      "description": "Compose clarification list widget in `widgets` and keep question/answer mutations in `features` layer.",
+      "acceptance_criteria": [
+        "Clarification widget renders question, category, and priority data.",
+        "Answer and status updates are handled by feature-level actions.",
+        "Data persistence uses entities/shared API modules only."
+      ],
+      "dependencies": [
+        "VP-0301",
+        "VP-0105",
+        "VP-0204"
+      ],
+      "affected_packages": [
+        "apps/web (widgets/clarifications)",
+        "apps/web (features/clarification-answer)",
+        "apps/web (entities/clarification)"
+      ],
+      "verification_subtask": {
+        "id": "VP-0303-V",
+        "title": "Verification: Run clarifications interaction tests",
+        "description": "Test question rendering and answer/status update interactions.",
+        "acceptance_criteria": [
+          "Widget displays prioritized clarification rows.",
+          "Answer submission updates persisted status.",
+          "Resolved/open toggles reflect backend state."
+        ],
+        "dependencies": [
+          "VP-0303"
+        ],
+        "affected_packages": [
+          "apps/web (widgets/clarifications)",
+          "apps/web (features/clarification-answer)"
+        ]
+      }
+    },
+    {
+      "id": "VP-0304",
+      "phase": "Phase 3: The Dashboard (App)",
+      "title": "[P] Implement graph session entity and status polling/subscription client",
+      "description": "Create `entities/session` model and shared API client to read LangGraph state updates from persisted sessions.",
+      "acceptance_criteria": [
+        "Session entity model maps `project_sessions` state fields.",
+        "Client supports polling or realtime subscription mode.",
+        "Status payloads are normalized for widget consumption."
+      ],
+      "dependencies": [
+        "VP-0301",
+        "VP-0205",
+        "VP-0105"
+      ],
+      "affected_packages": [
+        "apps/web (entities/session)",
+        "apps/web (shared/api)",
+        "@vibe/database"
+      ],
+      "verification_subtask": {
+        "id": "VP-0304-V",
+        "title": "Verification: Validate session status data flow",
+        "description": "Run integration test with mocked state updates and UI consumer binding.",
+        "acceptance_criteria": [
+          "Session state updates are received by client.",
+          "Normalized status values match UI expectations.",
+          "Polling/subscription cleanup avoids duplicate listeners."
+        ],
+        "dependencies": [
+          "VP-0304"
+        ],
+        "affected_packages": [
+          "apps/web (entities/session)",
+          "apps/web (shared/api)"
+        ]
+      }
+    },
+    {
+      "id": "VP-0305",
+      "phase": "Phase 3: The Dashboard (App)",
+      "title": "Implement real-time stage status widget",
+      "description": "Build `widgets/stage-status` that visualizes current stage, graph status, and blockers using session entity data.",
+      "acceptance_criteria": [
+        "Widget displays current stage and graph execution status.",
+        "UI updates when session state changes without page refresh.",
+        "Interrupted/failed states surface actionable next-step hints."
+      ],
+      "dependencies": [
+        "VP-0304"
+      ],
+      "affected_packages": [
+        "apps/web (widgets/stage-status)",
+        "apps/web (entities/session)"
+      ],
+      "verification_subtask": {
+        "id": "VP-0305-V",
+        "title": "Verification: Test real-time status widget updates",
+        "description": "Run UI test to confirm live update rendering on incoming state changes.",
+        "acceptance_criteria": [
+          "Stage and status labels update on new payloads.",
+          "Failed/interrupted states render distinct UI treatment.",
+          "No hydration/state mismatch errors occur in app runtime."
+        ],
+        "dependencies": [
+          "VP-0305"
+        ],
+        "affected_packages": [
+          "apps/web (widgets/stage-status)"
+        ]
+      }
+    },
+    {
+      "id": "VP-0306",
+      "phase": "Phase 3: The Dashboard (App)",
+      "title": "Add stage control actions in `processes` layer",
+      "description": "Implement start, resume, and approve stage actions in `processes` orchestrating feature/entity modules.",
+      "acceptance_criteria": [
+        "Process actions trigger AI flow start/resume operations.",
+        "Approval action guards downstream stage transitions.",
+        "Processes consume features/entities without violating FSD boundaries."
+      ],
+      "dependencies": [
+        "VP-0302",
+        "VP-0303",
+        "VP-0304"
+      ],
+      "affected_packages": [
+        "apps/web (processes/pipeline-control)",
+        "apps/web (features/intake)",
+        "apps/web (features/clarification-answer)",
+        "apps/web (entities/session)"
+      ],
+      "verification_subtask": {
+        "id": "VP-0306-V",
+        "title": "Verification: Exercise process-level stage controls",
+        "description": "Run integration test covering start, interrupt, resume, and approve actions.",
+        "acceptance_criteria": [
+          "Start action creates or updates a project session.",
+          "Resume action continues interrupted session correctly.",
+          "Approve action gates next stage as intended."
+        ],
+        "dependencies": [
+          "VP-0306"
+        ],
+        "affected_packages": [
+          "apps/web (processes/pipeline-control)"
+        ]
+      }
+    },
+    {
+      "id": "VP-0401",
+      "phase": "Phase 4: Integrations & Export",
+      "title": "[P] Build `@vibe/integrations` Figma REST adapter",
+      "description": "Implement Figma adapter for file/frame/node metadata pull with retry and rate-limit handling.",
+      "acceptance_criteria": [
+        "Adapter accepts Figma URL/key and retrieves target metadata.",
+        "Rate-limit and transient error handling is implemented.",
+        "Adapter output can be mapped into design node storage schema."
+      ],
+      "dependencies": [
+        "VP-0102",
+        "VP-0003"
+      ],
+      "affected_packages": [
+        "@vibe/integrations",
+        "@vibe/schema"
+      ],
+      "verification_subtask": {
+        "id": "VP-0401-V",
+        "title": "Verification: Run Figma adapter contract tests",
+        "description": "Execute adapter tests with mocked and sample real API responses.",
+        "acceptance_criteria": [
+          "Adapter parses expected node metadata structure.",
+          "Retry logic handles transient errors.",
+          "Invalid Figma input returns structured adapter errors."
+        ],
+        "dependencies": [
+          "VP-0401"
+        ],
+        "affected_packages": [
+          "@vibe/integrations"
+        ]
+      }
+    },
+    {
+      "id": "VP-0402",
+      "phase": "Phase 4: Integrations & Export",
+      "title": "[P] Build `@vibe/integrations` Linear SDK adapter",
+      "description": "Implement Linear issue creation adapter for task payload export with robust field mapping.",
+      "acceptance_criteria": [
+        "Adapter maps task payload fields to Linear issue input.",
+        "Adapter supports idempotent export behavior or duplicate protection strategy.",
+        "Adapter returns created issue identifiers for persistence."
+      ],
+      "dependencies": [
+        "VP-0003"
+      ],
+      "affected_packages": [
+        "@vibe/integrations"
+      ],
+      "verification_subtask": {
+        "id": "VP-0402-V",
+        "title": "Verification: Run Linear adapter integration checks",
+        "description": "Test adapter against mocked SDK client and validate field mapping.",
+        "acceptance_criteria": [
+          "Required Linear fields are populated in request payload.",
+          "Created issue IDs are returned in normalized format.",
+          "Adapter surfaces SDK failures with actionable error metadata."
+        ],
+        "dependencies": [
+          "VP-0402"
+        ],
+        "affected_packages": [
+          "@vibe/integrations"
+        ]
+      }
+    },
+    {
+      "id": "VP-0403",
+      "phase": "Phase 4: Integrations & Export",
+      "title": "Implement `ImplementationPlanner` node for `.cursor/rules` generation",
+      "description": "Add AI node that composes implementation artifacts and proposed `.cursor/rules` content from validated upstream specs.",
+      "acceptance_criteria": [
+        "Node consumes validated PRD/task/design inputs only.",
+        "Node output includes rule drafts mapped to architecture/task/design constraints.",
+        "Generated payload is schema-validated before persistence/export."
+      ],
+      "dependencies": [
+        "VP-0205",
+        "VP-0401",
+        "VP-0402",
+        "VP-0102"
+      ],
+      "affected_packages": [
+        "@vibe/ai",
+        "@vibe/schema",
+        "@vibe/integrations",
+        "@vibe/database"
+      ],
+      "verification_subtask": {
+        "id": "VP-0403-V",
+        "title": "Verification: Run ImplementationPlanner node test",
+        "description": "Execute node tests for valid and invalid artifact inputs.",
+        "acceptance_criteria": [
+          "Node emits rules draft for valid input bundle.",
+          "Invalid input bundle is rejected by schema validation.",
+          "Persisted output includes versioned artifact metadata."
+        ],
+        "dependencies": [
+          "VP-0403"
+        ],
+        "affected_packages": [
+          "@vibe/ai",
+          "@vibe/schema",
+          "@vibe/database"
+        ]
+      }
+    },
+    {
+      "id": "VP-0404",
+      "phase": "Phase 4: Integrations & Export",
+      "title": "Build Export Center UI in `widgets` + `features` layers",
+      "description": "Implement export center screen showing export readiness, destination controls, and operation history.",
+      "acceptance_criteria": [
+        "Export Center displays readiness state for required artifacts.",
+        "User can trigger repository export and Linear export actions.",
+        "Feature-layer actions and widget composition follow FSD boundaries."
+      ],
+      "dependencies": [
+        "VP-0306",
+        "VP-0402",
+        "VP-0403"
+      ],
+      "affected_packages": [
+        "apps/web (widgets/export-center)",
+        "apps/web (features/export-actions)",
+        "apps/web (entities/export)"
+      ],
+      "verification_subtask": {
+        "id": "VP-0404-V",
+        "title": "Verification: Test Export Center interaction flow",
+        "description": "Run UI tests for export readiness display and action triggers.",
+        "acceptance_criteria": [
+          "Readiness indicators reflect missing/approved artifacts.",
+          "Export action buttons call expected feature handlers.",
+          "Operation status updates render in the history section."
+        ],
+        "dependencies": [
+          "VP-0404"
+        ],
+        "affected_packages": [
+          "apps/web (widgets/export-center)",
+          "apps/web (features/export-actions)"
+        ]
+      }
+    },
+    {
+      "id": "VP-0405",
+      "phase": "Phase 4: Integrations & Export",
+      "title": "Implement export service for `project-spec/*` artifacts and status logging",
+      "description": "Create backend export workflow to emit markdown/json/rules files and persist export operation status.",
+      "acceptance_criteria": [
+        "Export service writes required artifact set to target repository structure.",
+        "Export status and timestamps are persisted for audit/history.",
+        "Service blocks export when approval gate conditions are unmet."
+      ],
+      "dependencies": [
+        "VP-0404",
+        "VP-0403",
+        "VP-0105"
+      ],
+      "affected_packages": [
+        "apps/web (features/export-actions)",
+        "@vibe/database",
+        "@vibe/ai"
+      ],
+      "verification_subtask": {
+        "id": "VP-0405-V",
+        "title": "Verification: Run export service integration test",
+        "description": "Execute end-to-end export simulation and inspect generated files and status logs.",
+        "acceptance_criteria": [
+          "Expected files are generated in target location.",
+          "Export run writes status record with terminal state.",
+          "Approval gate prevents export when prerequisites are incomplete."
+        ],
+        "dependencies": [
+          "VP-0405"
+        ],
+        "affected_packages": [
+          "apps/web (features/export-actions)",
+          "@vibe/database"
+        ]
+      }
+    },
+    {
+      "id": "VP-0406",
+      "phase": "Phase 4: Integrations & Export",
+      "title": "Generate internal .cursor/rules for the project itself based on the finalized spec.",
+      "description": "Produce the final internal ruleset that enforces architecture, FSD boundaries, task execution discipline, design sync constraints, and output format gates.",
+      "acceptance_criteria": [
+        "Rules reference finalized artifacts in `project-spec/*` as source of truth.",
+        "Rules enforce package dependency direction and FSD import boundaries.",
+        "Rules include guardrails for schema validation and approval-before-export."
+      ],
+      "dependencies": [
+        "VP-0405"
+      ],
+      "affected_packages": [
+        ".cursor/rules",
+        "workspace-root"
+      ],
+      "verification_subtask": {
+        "id": "VP-0406-V",
+        "title": "Verification: Validate generated internal rules consistency",
+        "description": "Review and lint generated rules against finalized spec artifacts and architecture constraints.",
+        "acceptance_criteria": [
+          "Each rule maps to an explicit finalized spec artifact.",
+          "No rule contradicts FSD or package dependency constraints.",
+          "Rule set passes lint/format checks and is ready for enforcement."
+        ],
+        "dependencies": [
+          "VP-0406"
+        ],
+        "affected_packages": [
+          ".cursor/rules",
+          "workspace-root"
+        ]
+      }
+    }
+  ]
+}

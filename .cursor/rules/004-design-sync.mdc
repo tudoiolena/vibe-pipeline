@@ -1,0 +1,24 @@
+# Design Sync Rule
+
+## Objective
+Ensure Figma context is consistently mapped to executable tasks and acceptance criteria.
+
+## Required Inputs
+- Figma URL and/or node IDs.
+- Current task tree (`project-spec/10-tasks.json`).
+- Current design map (`project-spec/06-design-map.json`).
+
+## Mapping Rules
+- Screen maps to epic.
+- Component maps to task.
+- State/variant maps to acceptance criteria.
+- Design tokens map to implementation constraints.
+
+## Quality Rules
+- Do not mark UI task complete without at least one verified design mapping.
+- Preserve mapping confidence and relation type.
+- Keep unmapped design nodes visible as gaps.
+
+## Delivery Rule
+- Design map updates must be versioned and exportable.
+- When design and task artifacts conflict, require human review before handoff.

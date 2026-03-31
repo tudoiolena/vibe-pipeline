@@ -1,0 +1,230 @@
+{
+  "meta": {
+    "artifact": "design_map",
+    "version": "2.0.0",
+    "status": "draft",
+    "generated_from": "Figma REST API + task tree",
+    "source_of_truth": [
+      "project-spec/02-prd.md",
+      "project-spec/05-acceptance-criteria.md",
+      "project-spec/10-tasks.json"
+    ]
+  },
+  "schema": {
+    "description": "A Figma design map that supports one node_id mapped to multiple task_ids and implementation tracking.",
+    "implementation_status_enum": [
+      "not_started",
+      "in_progress",
+      "implemented",
+      "verified",
+      "blocked"
+    ],
+    "relation_type_enum": [
+      "screen_to_epic",
+      "component_to_task",
+      "variant_to_acceptance_criteria",
+      "token_to_constraint"
+    ],
+    "node_task_link_shape": {
+      "node_id": "string",
+      "task_links": [
+        {
+          "task_id": "string",
+          "relation_type": "enum",
+          "confidence_score": "number(0..1)",
+          "implementation_status": "enum",
+          "acceptance_criteria_refs": [
+            "string"
+          ],
+          "evidence": {
+            "figma_url": "string",
+            "notes": "string"
+          }
+        }
+      ]
+    }
+  },
+  "figma_context": {
+    "figma_url": "https://www.figma.com/file/<file-key>/<project>",
+    "file_key": "<file-key>",
+    "frames": [
+      {
+        "node_id": "frame-intake",
+        "name": "Project Intake",
+        "url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-intake"
+      },
+      {
+        "node_id": "frame-clarifications",
+        "name": "Clarifications",
+        "url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-clarifications"
+      },
+      {
+        "node_id": "frame-prd-builder",
+        "name": "PRD Builder",
+        "url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-prd-builder"
+      },
+      {
+        "node_id": "frame-task-breakdown",
+        "name": "Task Breakdown",
+        "url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-task-breakdown"
+      },
+      {
+        "node_id": "frame-design-sync",
+        "name": "Design Sync",
+        "url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-design-sync"
+      },
+      {
+        "node_id": "frame-ai-handoff",
+        "name": "AI Handoff",
+        "url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-ai-handoff"
+      },
+      {
+        "node_id": "frame-export-center",
+        "name": "Export Center",
+        "url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-export-center"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "node_id": "frame-intake",
+      "node_type": "FRAME",
+      "node_name": "Project Intake",
+      "task_links": [
+        {
+          "task_id": "TASK-1.1",
+          "relation_type": "screen_to_epic",
+          "confidence_score": 0.96,
+          "implementation_status": "in_progress",
+          "acceptance_criteria_refs": [
+            "AC-01",
+            "AC-02"
+          ],
+          "evidence": {
+            "figma_url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-intake",
+            "notes": "Intake form layout and validation states."
+          }
+        },
+        {
+          "task_id": "TASK-1.2",
+          "relation_type": "component_to_task",
+          "confidence_score": 0.94,
+          "implementation_status": "not_started",
+          "acceptance_criteria_refs": [
+            "AC-02"
+          ],
+          "evidence": {
+            "figma_url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-intake",
+            "notes": "Normalizer output confirmation UI."
+          }
+        }
+      ]
+    },
+    {
+      "node_id": "frame-clarifications",
+      "node_type": "FRAME",
+      "node_name": "Clarifications",
+      "task_links": [
+        {
+          "task_id": "TASK-2.1",
+          "relation_type": "screen_to_epic",
+          "confidence_score": 0.95,
+          "implementation_status": "not_started",
+          "acceptance_criteria_refs": [
+            "AC-03"
+          ],
+          "evidence": {
+            "figma_url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-clarifications",
+            "notes": "Gap matrix visualization."
+          }
+        },
+        {
+          "task_id": "TASK-2.2",
+          "relation_type": "component_to_task",
+          "confidence_score": 0.92,
+          "implementation_status": "in_progress",
+          "acceptance_criteria_refs": [
+            "AC-03"
+          ],
+          "evidence": {
+            "figma_url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-clarifications",
+            "notes": "Question/answer row interaction."
+          }
+        }
+      ]
+    },
+    {
+      "node_id": "component-task-tree-item",
+      "node_type": "COMPONENT",
+      "node_name": "Task Tree Item",
+      "task_links": [
+        {
+          "task_id": "TASK-4.1",
+          "relation_type": "component_to_task",
+          "confidence_score": 0.93,
+          "implementation_status": "not_started",
+          "acceptance_criteria_refs": [
+            "AC-05"
+          ],
+          "evidence": {
+            "figma_url": "https://www.figma.com/file/<file-key>/<project>?node-id=component-task-tree-item",
+            "notes": "Hierarchy, dependencies and status badges."
+          }
+        },
+        {
+          "task_id": "TASK-4.2",
+          "relation_type": "variant_to_acceptance_criteria",
+          "confidence_score": 0.95,
+          "implementation_status": "not_started",
+          "acceptance_criteria_refs": [
+            "AC-05",
+            "AC-11"
+          ],
+          "evidence": {
+            "figma_url": "https://www.figma.com/file/<file-key>/<project>?node-id=component-task-tree-item",
+            "notes": "Edit mode, collapsed mode, dependency indicators."
+          }
+        }
+      ]
+    },
+    {
+      "node_id": "frame-design-sync",
+      "node_type": "FRAME",
+      "node_name": "Design Sync",
+      "task_links": [
+        {
+          "task_id": "TASK-5.1",
+          "relation_type": "screen_to_epic",
+          "confidence_score": 0.97,
+          "implementation_status": "not_started",
+          "acceptance_criteria_refs": [
+            "AC-06"
+          ],
+          "evidence": {
+            "figma_url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-design-sync",
+            "notes": "Figma URL input and node fetch controls."
+          }
+        },
+        {
+          "task_id": "TASK-5.2",
+          "relation_type": "component_to_task",
+          "confidence_score": 0.95,
+          "implementation_status": "not_started",
+          "acceptance_criteria_refs": [
+            "AC-06",
+            "AC-07"
+          ],
+          "evidence": {
+            "figma_url": "https://www.figma.com/file/<file-key>/<project>?node-id=frame-design-sync",
+            "notes": "Link editor and confidence badge."
+          }
+        }
+      ]
+    }
+  ],
+  "implementation_constraints": [
+    "Each mapped node_id can link to multiple task_ids and each link tracks implementation_status.",
+    "Only mapped links with confidence_score >= 0.80 can auto-enrich acceptance criteria.",
+    "Nodes with only blocked links must surface in Design Sync as unresolved delivery risk."
+  ]
+}

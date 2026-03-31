@@ -1,0 +1,39 @@
+# Output Format Rule
+
+## Artifact Standards
+- Generate structured artifacts in Markdown or JSON only.
+- Keep sections deterministic and stable across regenerations.
+- Include version, status, and traceable references where relevant.
+
+## Documentation Standards
+- Use clear headings and concise bullets.
+- Avoid ambiguous language and hidden assumptions.
+- Keep terminology consistent with PRD and acceptance criteria.
+
+## Schema Discipline
+- Prefer typed structured output over free-form prose.
+- Validate generated payloads against Zod-aligned schemas.
+- On schema failure, return explicit error context and retry path.
+
+## Handoff Package Standard
+Required package includes:
+- `project-spec/00-brief.md`
+- `project-spec/01-clarifications.md`
+- `project-spec/02-prd.md`
+- `project-spec/03-scope.md`
+- `project-spec/04-user-stories.md`
+- `project-spec/05-acceptance-criteria.md`
+- `project-spec/06-design-map.json`
+- `project-spec/07-implementation-plan.md`
+- `project-spec/08-test-plan.md`
+- `project-spec/09-done-definition.md`
+- `project-spec/10-tasks.json`
+- `.cursor/rules/001-project-context.mdc`
+- `.cursor/rules/002-architecture.mdc`
+- `.cursor/rules/003-task-execution.mdc`
+- `.cursor/rules/004-design-sync.mdc`
+- `.cursor/rules/005-output-format.mdc`
+
+## Export Guard
+- Export is allowed only after review/approve status is confirmed.
+- Block export if critical quality gates are not satisfied.

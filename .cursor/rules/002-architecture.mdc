@@ -1,0 +1,31 @@
+# Architecture Rule
+
+## Stack Constraints
+- Frontend: Next.js + TypeScript + Tailwind + shadcn/ui.
+- Backend: Next.js route handlers/server actions.
+- Workflow orchestration: LangGraph or equivalent stateful orchestrator.
+- Validation: Zod schemas for all key AI outputs.
+- Database: Supabase Postgres.
+
+## Structural Constraints
+- Prefer modular boundaries by domain:
+  - intake
+  - clarifications
+  - prd
+  - tasks
+  - design-sync
+  - handoff
+  - export
+- Keep integrations behind adapters (`figma`, `linear`, `continue`, `snyk`).
+- Avoid giant prompt architecture; use staged generation with typed outputs.
+
+## Data and State Rules
+- Persist stage state in `project_sessions`.
+- Persist versioned artifacts in `artifacts`.
+- Preserve parent-child hierarchy in tasks.
+- Store mapping relations in dedicated design-task link models.
+
+## Quality Rules
+- TypeScript strict mode is mandatory.
+- Every stage transition must be explicit and auditable.
+- No direct IDE automation requirement for Cursor in MVP; only file-based handoff.

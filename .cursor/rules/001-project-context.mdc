@@ -1,0 +1,27 @@
+# Project Context Rule
+
+## Purpose
+Keep all coding-agent work aligned with approved project artifacts and workflow intent.
+
+## Source of Truth
+- `project-spec/00-brief.md`
+- `project-spec/02-prd.md`
+- `project-spec/03-scope.md`
+- `project-spec/04-user-stories.md`
+- `project-spec/05-acceptance-criteria.md`
+- `project-spec/09-done-definition.md`
+
+## Core Workflow
+Always align decisions to:
+`Intake -> Clarify -> PRD -> Tasks -> Design Sync -> Handoff`
+
+## Mandatory Behavior
+- Do not implement features outside approved MVP scope.
+- Treat unresolved clarifications as risk, not hidden assumptions.
+- If requirements conflict, prefer approved PRD and acceptance criteria.
+- Keep outputs deterministic and schema-friendly.
+
+## Delivery Orientation
+- Prioritize artifact quality over prompt creativity.
+- Preserve versionability of generated documents and task updates.
+- Keep human review as a hard gate before export.

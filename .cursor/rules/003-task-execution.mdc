@@ -1,0 +1,28 @@
+# Task Execution Rule
+
+## Execution Order
+Follow implementation phases in sequence unless explicitly overridden:
+1. Setup + DB + Intake
+2. Clarifications + PRD
+3. Task breakdown
+4. Design sync
+5. Handoff artifacts + rules
+6. Linear export + polish
+
+## Task Handling
+- Work task-first from `project-spec/10-tasks.json`.
+- Preserve dependencies before starting downstream tasks.
+- Keep acceptance criteria visible during implementation.
+- Update task status only when acceptance criteria are met.
+
+## Completion Standard
+- A task is complete only if:
+  - functional behavior is implemented,
+  - required data is persisted,
+  - schema validation passes,
+  - test impact is addressed,
+  - artifacts stay consistent.
+
+## Scope Guard
+- Reject out-of-scope MVP work by default.
+- If a change is needed outside scope, record it as post-MVP backlog.
