@@ -1,6 +1,7 @@
 {
   "name": "vibe-pipeline-monorepo",
   "private": true,
+  "packageManager": "npm@11.2.0",
   "workspaces": [
     "apps/*",
     "packages/*"
