@@ -57,6 +57,12 @@ export const FunctionalRequirementSchema = z.object({
   details: z.array(z.string().min(1)).default([])
 });
 
+export const TechStackItemSchema = z.object({
+  name: z.string().min(1),
+  color: z.string().min(1),
+  category: z.string().min(1)
+});
+
 export const PRDSchema = z.object({
   productOverview: z.string().min(1),
   architectureFlow: z.array(StageSchema),
@@ -66,7 +72,7 @@ export const PRDSchema = z.object({
   usersAndPersonas: z.array(z.string().min(1)).default([]),
   functionalRequirements: z.array(FunctionalRequirementSchema).default([]),
   nonFunctionalRequirements: z.array(z.string().min(1)).default([]),
-  techStack: z.array(z.string().min(1)).default([]),
+  techStack: z.array(TechStackItemSchema).default([]),
   assumptions: z.array(z.string().min(1)).default([]),
   risks: z.array(z.string().min(1)).default([]),
   userStories: z.array(UserStorySchema).default([])
@@ -148,4 +154,33 @@ export const DesignMapSchema = z.object({
       })
     )
     .default([])
+});
+
+export const UIColorTokenSchema = z.object({
+  name: z.string().min(1),
+  hex: z.string().min(1),
+  description: z.string().optional()
+});
+
+export const UITypographyTokenSchema = z.object({
+  name: z.string().min(1),
+  fontFamily: z.string().optional(),
+  fontWeight: z.union([z.string(), z.number()]).optional(),
+  fontSize: z.union([z.string(), z.number()]).optional(),
+  lineHeight: z.union([z.string(), z.number()]).optional(),
+  letterSpacing: z.union([z.string(), z.number()]).optional(),
+  description: z.string().optional()
+});
+
+export const UIComponentSchema = z.object({
+  name: z.string().min(1),
+  nodeId: z.string().optional(),
+  key: z.string().optional(),
+  description: z.string().optional()
+});
+
+export const UIKitSchema = z.object({
+  colorPalette: z.array(UIColorTokenSchema).default([]),
+  typography: z.array(UITypographyTokenSchema).default([]),
+  componentInventory: z.array(UIComponentSchema).default([])
 });

@@ -9,6 +9,7 @@ import { IntakeForm } from "@/features/intake-form";
 import { PrdReadMode } from "@/features/prd-read-mode";
 import { SessionProgressWithHistory } from "@/features/session-history";
 import { getPipelineStageLabel, type ProjectSessionStage } from "@/lib/pipeline-stage-labels";
+import { parseProjectSpecFiles, type ProjectSpecFile } from "@/lib/project-spec-files";
 import { getSessionStepperActiveIndex } from "@/lib/session-progress";
 import {
   createClient,
@@ -16,7 +17,8 @@ import {
   getLatestProjectSessionByProjectId,
   getProjectById
 } from "@vibe/database";
-import { BriefSchema, PRDSchema, type PRD } from "@vibe/schema";
+import { resolveDesignMapFromSession, resolveTaskTreeForSession } from "@/lib/pipeline-export-state";
+import { BriefSchema, PRDSchema, UIKitSchema, type PRD, type TaskTree, type UIKit } from "@vibe/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -46,12 +48,77 @@ function parsePrdFromSessionState(stateJson: unknown): PRD | null {
   return parsed.success ? parsed.data : null;
 }
 
+type CursorRuleFile = {
+  filename: string;
+  content: string;
+};
+
+function parseSpecFilesFromSessionState(stateJson: unknown): ProjectSpecFile[] {
+  const envelope = parseEnvelope(stateJson);
+  const raw = envelope?.pipelineState.stateJson;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return [];
+  }
+  return parseProjectSpecFiles((raw as Record<string, unknown>).specFiles);
+}
+
+function parseCursorRulesFromSessionState(stateJson: unknown): CursorRuleFile[] {
+  const envelope = parseEnvelope(stateJson);
+  const raw = envelope?.pipelineState.stateJson;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return [];
+  }
+  const cursorRules = (raw as Record<string, unknown>).cursorRules;
+  if (Array.isArray(cursorRules)) {
+    const out: CursorRuleFile[] = [];
+    for (const rule of cursorRules) {
+      if (!rule || typeof rule !== "object" || Array.isArray(rule)) {
+        continue;
+      }
+      const entry = rule as Record<string, unknown>;
+      const filename =
+        typeof entry.filename === "string"
+          ? entry.filename
+          : typeof entry.path === "string"
+            ? entry.path
+            : typeof entry.filePath === "string"
+              ? entry.filePath
+              : null;
+      const content = typeof entry.content === "string" ? entry.content : null;
+      if (filename && content) {
+        out.push({ filename, content });
+      }
+    }
+    return out;
+  }
+  if (cursorRules && typeof cursorRules === "object" && !Array.isArray(cursorRules)) {
+    return Object.entries(cursorRules)
+      .filter((entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string")
+      .map(([filename, content]) => ({ filename, content }));
+  }
+  return [];
+}
+
+function parseUIKitFromSessionState(stateJson: unknown): UIKit | null {
+  const envelope = parseEnvelope(stateJson);
+  const raw = envelope?.pipelineState.stateJson;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const parsed = UIKitSchema.safeParse((raw as Record<string, unknown>).uiKit);
+  return parsed.success ? parsed.data : null;
+}
+
 /** Maps each session stage to the primary UI block for this page. Stages not listed have no main panel. */
 const SESSION_STAGE_MAIN_FEATURE: Partial<Record<ProjectSessionStage, "intake" | "gaps" | "prd">> = {
   intake: "intake",
   analysis: "gaps",
   clarify: "gaps",
-  prd: "prd"
+  prd: "prd",
+  tasks: "prd",
+  design_sync: "prd",
+  handoff: "prd",
+  export: "prd"
 };
 
 function getIntakeEditorInitialText(project: { description: string | null }, stateJson: unknown): string {
@@ -79,6 +146,35 @@ function getIntakeEditorInitialText(project: { description: string | null }, sta
   return "";
 }
 
+function getInitialFigmaUrlFromState(stateJson: unknown): string {
+  const envelope = parseEnvelope(stateJson);
+  const raw = envelope?.pipelineState.stateJson;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return "";
+  }
+  const key = (raw as Record<string, unknown>).figmaFileKey;
+  if (typeof key !== "string" || !key.trim()) {
+    return "";
+  }
+  const k = key.trim();
+  return `https://www.figma.com/design/${encodeURIComponent(k)}/file`;
+}
+
+function linearTeamDisplayFromEnv(): string {
+  const name = process.env.LINEAR_TEAM_NAME?.trim();
+  if (name) {
+    return name;
+  }
+  const id = process.env.LINEAR_TEAM_ID?.trim();
+  if (id && id.length > 10) {
+    return `Team ${id.slice(0, 8)}…`;
+  }
+  if (id) {
+    return `Team ${id}`;
+  }
+  return "configured team";
+}
+
 function renderSessionStageContent(options: {
   stage: ProjectSessionStage;
   sessionId: string;
@@ -86,6 +182,13 @@ function renderSessionStageContent(options: {
   project: { description: string | null };
   stateJson: unknown;
   prdForRead: PRD | null;
+  taskTreeForExport: TaskTree | null;
+  designMapForRead: ReturnType<typeof resolveDesignMapFromSession>;
+  cursorRulesForRead: CursorRuleFile[];
+  specFilesForRead: ProjectSpecFile[];
+  uiKitForRead: UIKit | null;
+  linearTeamDisplay: string;
+  defaultLinearTeamId: string | undefined;
 }): ReactNode {
   const feature = SESSION_STAGE_MAIN_FEATURE[options.stage];
   if (feature === "intake") {
@@ -94,6 +197,7 @@ function renderSessionStageContent(options: {
         projectId={options.projectId}
         pipelineSessionId={options.sessionId}
         initialIntakeText={getIntakeEditorInitialText(options.project, options.stateJson)}
+        initialFigmaUrl={getInitialFigmaUrlFromState(options.stateJson)}
       />
     );
   }
@@ -102,7 +206,18 @@ function renderSessionStageContent(options: {
   }
   if (feature === "prd") {
     return options.prdForRead ? (
-      <PrdReadMode prd={options.prdForRead} sessionId={options.sessionId} />
+      <PrdReadMode
+        prd={options.prdForRead}
+        sessionId={options.sessionId}
+        projectId={options.projectId}
+        taskTree={options.taskTreeForExport}
+        designMap={options.designMapForRead}
+        cursorRules={options.cursorRulesForRead}
+        specFiles={options.specFilesForRead}
+        uiKit={options.uiKitForRead ?? undefined}
+        linearTeamDisplay={options.linearTeamDisplay}
+        defaultLinearTeamId={options.defaultLinearTeamId}
+      />
     ) : (
       <Card>
         <CardHeader>
@@ -128,8 +243,11 @@ export default async function ProjectSessionPage({ params }: ProjectPageProps) {
 
   const { data: session, error: sessionError } = await getLatestProjectSessionByProjectId(client, projectId);
 
+  const isReadModeStage = (stage: ProjectSessionStage) =>
+    stage === "prd" || stage === "tasks" || stage === "design_sync" || stage === "handoff" || stage === "export";
+
   let prdForRead: PRD | null = null;
-  if (session && !sessionError && session.current_stage === "prd") {
+  if (session && !sessionError && isReadModeStage(session.current_stage)) {
     const { data: prdArtifact } = await getLatestArtifactVersion(client, projectId, "prd");
     if (prdArtifact?.content_json) {
       const parsed = PRDSchema.safeParse(prdArtifact.content_json);
@@ -141,6 +259,22 @@ export default async function ProjectSessionPage({ params }: ProjectPageProps) {
       prdForRead = parsePrdFromSessionState(session.state_json);
     }
   }
+
+  let taskTreeForExport: TaskTree | null = null;
+  let designMapForRead: ReturnType<typeof resolveDesignMapFromSession> = undefined;
+  let cursorRulesForRead: CursorRuleFile[] = [];
+  let specFilesForRead: ProjectSpecFile[] = [];
+  let uiKitForRead: UIKit | null = null;
+  if (session && !sessionError && isReadModeStage(session.current_stage)) {
+    taskTreeForExport = await resolveTaskTreeForSession(client, projectId, session.state_json);
+    designMapForRead = resolveDesignMapFromSession(session.state_json);
+    cursorRulesForRead = parseCursorRulesFromSessionState(session.state_json);
+    specFilesForRead = parseSpecFilesFromSessionState(session.state_json);
+    uiKitForRead = parseUIKitFromSessionState(session.state_json);
+  }
+
+  const linearTeamDisplay = linearTeamDisplayFromEnv();
+  const defaultLinearTeamId = process.env.NEXT_PUBLIC_LINEAR_TEAM_ID?.trim() || undefined;
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
@@ -193,7 +327,14 @@ export default async function ProjectSessionPage({ params }: ProjectPageProps) {
             projectId,
             project,
             stateJson: session.state_json,
-            prdForRead
+            prdForRead,
+            taskTreeForExport,
+            designMapForRead,
+            cursorRulesForRead,
+            specFilesForRead,
+            uiKitForRead,
+            linearTeamDisplay,
+            defaultLinearTeamId
           })}
         </SessionProgressWithHistory>
       ) : null}

@@ -1,12 +1,17 @@
 export { SupabaseSessionCheckpointer } from "./checkpointer";
 export {
   createApplyClarificationNode,
+  createDesignAnalysisNode,
   createGapDetectorNode,
+  createHandoffCompletionNode,
+  createImplementationPlannerNode,
   createIntakeNormalizerNode,
   createNeedsClarificationNode,
   createPipelineNode,
-  createPrdDesignerNode
+  createPrdDesignerNode,
+  createTaskGeneratorNode
 } from "./nodes";
+export { pipelineDebug } from "./pipeline-debug";
 export { createPipelineGraph, createSessionConfig, PIPELINE_CHECKPOINT_NAMESPACE } from "./pipeline-graph";
 export { redraftPipelineFromPrd, type RedraftGraphTarget } from "./redraft-pipeline";
 export { restartPipelineIntakeWithNewText } from "./restart-intake-pipeline";

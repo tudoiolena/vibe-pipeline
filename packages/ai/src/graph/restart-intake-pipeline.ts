@@ -24,6 +24,8 @@ function stripForIntakeRestart(json: Record<string, unknown>): Record<string, un
   delete next.gapAnalysis;
   delete next.needsClarification;
   delete next.clarificationFollowUp;
+  delete next.lastUserClarification;
+  delete next.clarificationRounds;
   delete next.route;
   delete next.redraftRequested;
   delete next.brief;
@@ -42,7 +44,8 @@ export async function restartPipelineIntakeWithNewText(
   client: DatabaseClient,
   sessionId: string,
   projectId: string,
-  rawIntakeText: string
+  rawIntakeText: string,
+  options?: { figmaFileKey?: string | null }
 ): Promise<void> {
   const trimmed = rawIntakeText.trim();
   if (trimmed.length === 0) {
@@ -86,18 +89,29 @@ export async function restartPipelineIntakeWithNewText(
       ? String((base.stateJson as Record<string, unknown>).rawIntakeText).trim()
       : "";
 
+  const stateJsonPayload: Record<string, unknown> = {
+    ...nextJson,
+    rawIntakeText: trimmed,
+    _sessionHistoryMeta: {
+      is_brief_update: true,
+      previous_brief: priorRaw,
+      new_brief: trimmed
+    }
+  };
+
+  if (options?.figmaFileKey !== undefined) {
+    const fk = options.figmaFileKey;
+    if (fk === null || fk === "") {
+      delete stateJsonPayload.figmaFileKey;
+    } else {
+      stateJsonPayload.figmaFileKey = fk.trim();
+    }
+  }
+
   const mergedState: PipelineState = {
     ...base,
     currentStage: "intake",
-    stateJson: {
-      ...nextJson,
-      rawIntakeText: trimmed,
-      _sessionHistoryMeta: {
-        is_brief_update: true,
-        previous_brief: priorRaw,
-        new_brief: trimmed
-      }
-    }
+    stateJson: stateJsonPayload
   };
 
   const { error: projectError } = await updateProjectById(client, projectId, {

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DesignMapSchema = exports.DesignTaskRelationSchema = exports.DesignNodeSchema = exports.DesignNodeTypeSchema = exports.TaskTreeSchema = exports.TaskNodeSchema = exports.TaskStatusSchema = exports.PRDSchema = exports.FunctionalRequirementSchema = exports.UserStorySchema = exports.BriefSchema = exports.SourceLinkSchema = exports.StageSchema = exports.TaskTypeSchema = exports.PrioritySchema = exports.ClarificationCategorySchema = void 0;
+exports.DesignMapSchema = exports.DesignTaskRelationSchema = exports.DesignNodeSchema = exports.DesignNodeTypeSchema = exports.TaskTreeSchema = exports.TaskNodeSchema = exports.TaskStatusSchema = exports.PRDSchema = exports.TechStackItemSchema = exports.FunctionalRequirementSchema = exports.UserStorySchema = exports.BriefSchema = exports.SourceLinkSchema = exports.StageSchema = exports.TaskTypeSchema = exports.PrioritySchema = exports.ClarificationCategorySchema = void 0;
 var zod_1 = require("zod");
 exports.ClarificationCategorySchema = zod_1.z.enum([
     "roles",
@@ -51,6 +51,11 @@ exports.FunctionalRequirementSchema = zod_1.z.object({
     title: zod_1.z.string().min(1),
     details: zod_1.z.array(zod_1.z.string().min(1)).default([])
 });
+exports.TechStackItemSchema = zod_1.z.object({
+    name: zod_1.z.string().min(1),
+    color: zod_1.z.string().min(1),
+    category: zod_1.z.string().min(1)
+});
 exports.PRDSchema = zod_1.z.object({
     productOverview: zod_1.z.string().min(1),
     architectureFlow: zod_1.z.array(exports.StageSchema),
@@ -60,7 +65,7 @@ exports.PRDSchema = zod_1.z.object({
     usersAndPersonas: zod_1.z.array(zod_1.z.string().min(1)).default([]),
     functionalRequirements: zod_1.z.array(exports.FunctionalRequirementSchema).default([]),
     nonFunctionalRequirements: zod_1.z.array(zod_1.z.string().min(1)).default([]),
-    techStack: zod_1.z.array(zod_1.z.string().min(1)).default([]),
+    techStack: zod_1.z.array(exports.TechStackItemSchema).default([]),
     assumptions: zod_1.z.array(zod_1.z.string().min(1)).default([]),
     risks: zod_1.z.array(zod_1.z.string().min(1)).default([]),
     userStories: zod_1.z.array(exports.UserStorySchema).default([])

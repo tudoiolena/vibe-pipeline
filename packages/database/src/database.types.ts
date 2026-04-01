@@ -90,6 +90,7 @@ export type Database = {
           state_json: Json;
           last_node: string | null;
           last_error: Json | null;
+          metadata: Json;
           created_at: string;
           updated_at: string;
         };
@@ -110,6 +111,7 @@ export type Database = {
           state_json?: Json;
           last_node?: string | null;
           last_error?: Json | null;
+          metadata?: Json;
           created_at?: string;
           updated_at?: string;
         };
@@ -130,6 +132,7 @@ export type Database = {
           state_json?: Json;
           last_node?: string | null;
           last_error?: Json | null;
+          metadata?: Json;
           created_at?: string;
           updated_at?: string;
         };

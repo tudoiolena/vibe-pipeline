@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import type { GapItem } from "@/features/gap-viewer/model/gap-session-state.schema";
 import { useSessionHistoryVersion } from "../context/session-history-refresh-context";
 import {
+  SessionHistoryPayloadSchema,
   SessionHistoryResponseSchema,
   type SessionHistoryEntry
 } from "../model/session-history.schema";
@@ -334,9 +335,30 @@ function MilestoneDivider({ entry }: { entry: SessionHistoryEntry }) {
   );
 }
 
+function ClarificationRoundsSummary({ rounds }: { rounds: string[] }) {
+  if (rounds.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mb-6 rounded-lg border border-border bg-muted/30 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Clarifications submitted ({rounds.length})
+      </p>
+      <ol className="mt-3 list-decimal space-y-3 pl-5 text-sm leading-relaxed text-foreground">
+        {rounds.map((text, i) => (
+          <li key={i} className="pl-1">
+            <div className="whitespace-pre-wrap">{text}</div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 export function SessionAuditLog({ sessionId, embedded = false }: SessionAuditLogProps) {
   const historyVersion = useSessionHistoryVersion();
   const [entries, setEntries] = useState<SessionHistoryEntry[]>([]);
+  const [clarificationRounds, setClarificationRounds] = useState<string[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -350,14 +372,22 @@ export function SessionAuditLog({ sessionId, embedded = false }: SessionAuditLog
         throw new Error(body?.error ?? `Failed to load history (${res.status})`);
       }
       const json: unknown = await res.json();
-      const parsed = SessionHistoryResponseSchema.safeParse(json);
-      if (!parsed.success) {
+      const wrapped = SessionHistoryPayloadSchema.safeParse(json);
+      if (wrapped.success) {
+        setEntries(wrapped.data.entries);
+        setClarificationRounds(wrapped.data.clarificationRounds);
+        return;
+      }
+      const legacy = SessionHistoryResponseSchema.safeParse(json);
+      if (!legacy.success) {
         throw new Error("Unexpected history response shape.");
       }
-      setEntries(parsed.data);
+      setEntries(legacy.data);
+      setClarificationRounds([]);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : "Failed to load history.");
       setEntries([]);
+      setClarificationRounds([]);
     } finally {
       setIsLoading(false);
     }
@@ -416,7 +446,7 @@ export function SessionAuditLog({ sessionId, embedded = false }: SessionAuditLog
     );
   }
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && clarificationRounds.length === 0) {
     return (
       <div
         className={cn(
@@ -437,7 +467,13 @@ export function SessionAuditLog({ sessionId, embedded = false }: SessionAuditLog
           <p className="mt-1 text-xs text-muted-foreground">Conversation-style log — oldest at top.</p>
         </>
       ) : null}
-      <div className={cn("space-y-4", !embedded && "mt-6")}>
+      <ClarificationRoundsSummary rounds={clarificationRounds} />
+      {entries.length === 0 ? (
+        <p className="mt-4 text-sm text-muted-foreground">
+          No checkpoint timeline rows yet; clarifications above are from the live session state.
+        </p>
+      ) : (
+        <div className={cn("mt-6 space-y-4")}>
         {segments.map((seg, si) => {
           if (seg.kind === "milestone") {
             return <MilestoneDivider key={`milestone-${seg.entry.checkpointId}-${si}`} entry={seg.entry} />;
@@ -488,7 +524,8 @@ export function SessionAuditLog({ sessionId, embedded = false }: SessionAuditLog
             </div>
           );
         })}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

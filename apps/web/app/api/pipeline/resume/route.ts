@@ -1,7 +1,10 @@
-import { resumePipelineWithClarification } from "@vibe/ai/graph";
+import { pipelineDebug, resumePipelineWithClarification } from "@vibe/ai/graph";
 import { createClient, updateProjectSessionById } from "@vibe/database";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+
+/** Allow long clarification → PRD → tasks → handoff runs on Vercel (requires compatible plan). */
+export const maxDuration = 300;
 
 const ResumeBodySchema = z.object({
   sessionId: z.string().uuid(),
@@ -21,15 +24,26 @@ export async function POST(request: Request) {
 
   const client = createClient();
 
+  pipelineDebug("resume POST", {
+    sessionId: parsed.data.sessionId,
+    inputChars: parsed.data.userInput.length
+  });
+
   try {
     await resumePipelineWithClarification(client, parsed.data.sessionId, parsed.data.userInput);
+    pipelineDebug("resume OK", { sessionId: parsed.data.sessionId });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await updateProjectSessionById(client, parsed.data.sessionId, {
-      graph_status: "failed",
-      last_error: { message }
-    });
-    return NextResponse.json({ error: message }, { status: 500 });
+    pipelineDebug("resume error", { sessionId: parsed.data.sessionId, message });
+    const isWrongPhase = message.startsWith("Session is not waiting for clarification");
+    if (!isWrongPhase) {
+      await updateProjectSessionById(client, parsed.data.sessionId, {
+        graph_status: "failed",
+        last_error: { message }
+      });
+    }
+    const status = isWrongPhase ? 409 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 
   return NextResponse.json({ ok: true });

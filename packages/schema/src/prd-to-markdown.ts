@@ -18,6 +18,13 @@ function bulletList(items: string[]): string {
   return items.map((item) => `- ${item}`).join("\n") + "\n";
 }
 
+function techStackBulletList(items: z.infer<typeof PRDSchema>["techStack"]): string {
+  if (items.length === 0) {
+    return "_None listed._\n";
+  }
+  return items.map((item) => `- ${item.name} (${item.category}, ${item.color})`).join("\n") + "\n";
+}
+
 function section(title: string, body: string): string {
   return `## ${title}\n\n${body}\n\n`;
 }
@@ -62,7 +69,7 @@ export function prdDocumentToMarkdown(prd: z.infer<typeof PRDSchema>): string {
     section("User stories", stories || "_None listed._\n"),
     section("Functional requirements", functional || "_None listed._\n"),
     section("Non-functional requirements", bulletList(prd.nonFunctionalRequirements)),
-    section("Tech stack", bulletList(prd.techStack)),
+    section("Tech stack", techStackBulletList(prd.techStack)),
     section("Assumptions", bulletList(prd.assumptions)),
     section("Risks", bulletList(prd.risks))
   ];

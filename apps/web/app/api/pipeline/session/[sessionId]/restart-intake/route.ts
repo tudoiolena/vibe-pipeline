@@ -5,7 +5,9 @@ import { z } from "zod";
 
 const BodySchema = z.object({
   projectId: z.string().uuid(),
-  intakeText: z.string().min(1, "intakeText is required.")
+  intakeText: z.string().min(1, "intakeText is required."),
+  /** Omit to leave Figma unchanged; send null or "" to clear `figmaFileKey` on the session. */
+  figmaFileKey: z.union([z.string().min(1), z.literal(""), z.null()]).optional()
 });
 
 export async function POST(request: Request, context: { params: Promise<{ sessionId: string }> }) {
@@ -27,12 +29,12 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
   const client = createClient();
 
   try {
-    await restartPipelineIntakeWithNewText(
-      client,
-      idParse.data,
-      parsed.data.projectId,
-      parsed.data.intakeText.trim()
-    );
+    const body = parsed.data;
+    const figmaOpt = body.figmaFileKey;
+    await restartPipelineIntakeWithNewText(client, idParse.data, body.projectId, body.intakeText.trim(), {
+      figmaFileKey:
+        figmaOpt === undefined ? undefined : figmaOpt === null || figmaOpt === "" ? null : figmaOpt.trim()
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await updateProjectSessionById(client, idParse.data, {

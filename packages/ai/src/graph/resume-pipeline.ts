@@ -62,6 +62,7 @@ export async function resumePipelineWithClarification(
   const priorJson = base.stateJson as Record<string, unknown>;
   const mergedState: PipelineState = {
     ...base,
+    currentStage: "clarify",
     stateJson: {
       ...priorJson,
       clarificationFollowUp: trimmed

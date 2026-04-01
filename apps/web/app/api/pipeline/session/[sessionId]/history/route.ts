@@ -1,3 +1,4 @@
+import { type PersistedCheckpointEnvelope } from "@vibe/ai/graph";
 import {
   createClient,
   getProjectSessionById,
@@ -37,6 +38,42 @@ type RawRow = {
   created_at: string;
   pipeline_state_json: Json;
 };
+
+function parseEnvelope(stateJson: unknown): PersistedCheckpointEnvelope | null {
+  if (!stateJson || typeof stateJson !== "object" || Array.isArray(stateJson)) {
+    return null;
+  }
+  const candidate = stateJson as Partial<PersistedCheckpointEnvelope>;
+  if (!candidate.pipelineState || !candidate.checkpoint) {
+    return null;
+  }
+  return candidate as PersistedCheckpointEnvelope;
+}
+
+function clarificationRoundsFromSessionStateJson(sessionStateJson: Json): string[] {
+  const envelope = parseEnvelope(sessionStateJson);
+  const raw = envelope?.pipelineState.stateJson as Record<string, unknown> | undefined;
+  const rounds = raw?.clarificationRounds;
+  if (Array.isArray(rounds)) {
+    const fromState = rounds.filter((x): x is string => typeof x === "string" && x.trim().length > 0);
+    if (fromState.length > 0) {
+      return fromState;
+    }
+  }
+  const brief = raw?.brief;
+  if (!brief || typeof brief !== "object" || Array.isArray(brief)) {
+    return [];
+  }
+  const summary = (brief as { summary?: unknown }).summary;
+  if (typeof summary !== "string" || !summary.includes("User clarification:\n")) {
+    return [];
+  }
+  return summary
+    .split(/\n\nUser clarification:\n/)
+    .slice(1)
+    .map((block) => block.trim())
+    .filter(Boolean);
+}
 
 const BURST_MS = 2000;
 
@@ -133,11 +170,19 @@ function milestoneFromLatestState(pipelineStateJson: Json): { is: boolean; label
   if (!pipelineStateJson || typeof pipelineStateJson !== "object" || Array.isArray(pipelineStateJson)) {
     return { is: false, label: null };
   }
-  const stateJson = (pipelineStateJson as { stateJson?: unknown }).stateJson;
+  const recRoot = pipelineStateJson as { currentStage?: unknown; stateJson?: unknown };
+  const stateJson = recRoot.stateJson;
   if (!stateJson || typeof stateJson !== "object" || Array.isArray(stateJson)) {
     return { is: false, label: null };
   }
   const rec = stateJson as Record<string, unknown>;
+  const currentStage = typeof recRoot.currentStage === "string" ? recRoot.currentStage : null;
+  if (currentStage === "clarify") {
+    return { is: false, label: null };
+  }
+  if (rec.workflowStatus === "awaiting_user_clarification") {
+    return { is: false, label: null };
+  }
   if (rec.prd !== undefined && rec.prd !== null && typeof rec.prd === "object") {
     return { is: true, label: "PRD generated" };
   }
@@ -161,12 +206,17 @@ function shouldGroupWithPrevious(prev: RawRow, curr: RawRow): boolean {
   if (isBriefUpdateRow(prev) || isBriefUpdateRow(curr)) {
     return false;
   }
+  const uPrev = userClarificationFromPipelineStateJson(prev.pipeline_state_json);
+  const uCurr = userClarificationFromPipelineStateJson(curr.pipeline_state_json);
+  // Interrupt checkpoints still carry `lastUserClarification` from the prior round; do not merge
+  // a new resume (different text) into that group just because timestamps are close together.
+  if (uPrev && uCurr && !sameUserClarification(uPrev, uCurr)) {
+    return false;
+  }
   const dt = Math.abs(rowTimeMs(curr) - rowTimeMs(prev));
   if (dt <= BURST_MS) {
     return true;
   }
-  const uPrev = userClarificationFromPipelineStateJson(prev.pipeline_state_json);
-  const uCurr = userClarificationFromPipelineStateJson(curr.pipeline_state_json);
   return sameUserClarification(uPrev, uCurr);
 }
 
@@ -228,11 +278,11 @@ function mergedEntryFromGroup(group: RawRow[]): HistoryEntry {
 
   let type: HistoryItemType;
   let milestoneLabel: string | null = null;
-  if (milestone.is) {
+  if (userInGroup) {
+    type = "USER_INPUT";
+  } else if (milestone.is) {
     type = "MILESTONE";
     milestoneLabel = milestone.label;
-  } else if (userInGroup) {
-    type = "USER_INPUT";
   } else {
     type = "ANALYSIS_RESULT";
   }
@@ -242,7 +292,7 @@ function mergedEntryFromGroup(group: RawRow[]): HistoryEntry {
     timestamp: latest.checkpoint_ts ?? latest.created_at,
     type,
     milestoneLabel,
-    userClarification: milestone.is ? null : userInGroup,
+    userClarification: userInGroup,
     previousBrief: null,
     newBrief: null,
     gapCount: gaps.length,
@@ -291,6 +341,7 @@ export async function GET(_request: Request, context: { params: Promise<{ sessio
   const mergedChrono: HistoryEntry[] = groups.map(mergedEntryFromGroup);
   assignGapCountBefore(mergedChrono);
   const newestFirst = [...mergedChrono].reverse();
+  const clarificationRounds = clarificationRoundsFromSessionStateJson(session.state_json);
 
-  return NextResponse.json(newestFirst);
+  return NextResponse.json({ entries: newestFirst, clarificationRounds });
 }

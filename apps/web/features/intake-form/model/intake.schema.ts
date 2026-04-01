@@ -1,7 +1,8 @@
 import { z } from "zod";
 
 export const IntakeRequestSchema = z.object({
-  intakeText: z.string().min(1, "Please describe your vibe before submitting.")
+  intakeText: z.string().min(1, "Please describe your vibe before submitting."),
+  figmaFileKey: z.string().min(1).optional()
 });
 
 export type IntakeRequest = z.infer<typeof IntakeRequestSchema>;

@@ -14,7 +14,11 @@ export const GapSessionStateSchema = z.object({
   stageLabel: z.string(),
   graphStatus: z.string(),
   gaps: z.array(GapItemSchema),
-  needsClarification: z.boolean()
+  needsClarification: z.boolean(),
+  workflowStatus: z.string().nullable().optional(),
+  hasPrd: z.boolean().optional(),
+  clarificationRounds: z.array(z.string()).optional(),
+  sessionUpdatedAt: z.string().optional()
 });
 
 export type GapItem = z.infer<typeof GapItemSchema>;

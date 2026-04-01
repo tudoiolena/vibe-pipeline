@@ -21,6 +21,7 @@
     "@langchain/core": "^0.3.75",
     "@langchain/langgraph": "^0.4.8",
     "@vibe/database": "*",
+    "@vibe/integrations": "*",
     "@vibe/schema": "*",
     "zod": "^3.24.2"
   }

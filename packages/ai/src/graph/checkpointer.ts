@@ -16,6 +16,7 @@ import {
   type DatabaseClient,
   type Json
 } from "@vibe/database";
+import { pipelineDebug } from "./pipeline-debug";
 import { PipelineStateSchema, type PersistedCheckpointEnvelope } from "./state";
 
 function toJson(value: unknown): Json {
@@ -40,8 +41,13 @@ function getLastNodeFromMetadata(metadata: CheckpointMetadata): string | null {
   return nodeNames.length > 0 ? nodeNames[0] : null;
 }
 
-function resolveGraphStatus(stateJson: Record<string, unknown>): "running" | "interrupted_for_input" {
+function resolveGraphStatus(
+  stateJson: Record<string, unknown>
+): "running" | "interrupted_for_input" | "completed" {
   const workflowStatus = stateJson.workflowStatus;
+  if (workflowStatus === "completed") {
+    return "completed";
+  }
   return workflowStatus === "awaiting_user_clarification" ? "interrupted_for_input" : "running";
 }
 
@@ -160,6 +166,15 @@ export class SupabaseSessionCheckpointer extends BaseCheckpointSaver {
 
     const lastNode = getLastNodeFromMetadata(metadata);
     const nextGraphStatus = resolveGraphStatus(pipelineState.stateJson as Record<string, unknown>);
+    const sj = pipelineState.stateJson as Record<string, unknown>;
+    pipelineDebug("checkpoint put", {
+      sessionId,
+      checkpointId: checkpoint.id,
+      currentStage: pipelineState.currentStage,
+      graphStatus: nextGraphStatus,
+      workflowStatus: typeof sj.workflowStatus === "string" ? sj.workflowStatus : undefined,
+      lastNode
+    });
     const { error: updateError } = await updateProjectSessionById(this.client, sessionId, {
       current_stage: pipelineState.currentStage,
       graph_status: nextGraphStatus,

@@ -46,8 +46,8 @@ export async function redraftPipelineFromPrd(
   if (!session) {
     throw new Error(`Session ${sessionId} was not found.`);
   }
-  if (session.current_stage !== "prd") {
-    throw new Error("Re-draft is only available when the session is in the PRD stage.");
+  if (!["prd", "tasks", "design_sync", "handoff", "export"].includes(session.current_stage)) {
+    throw new Error("Re-draft is only available after PRD generation.");
   }
 
   const envelope = parseEnvelope(session.state_json);

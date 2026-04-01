@@ -28,6 +28,79 @@ function sortGaps(gaps: GapItem[]): GapItem[] {
   return [...gaps].sort((a, b) => order[a.priority] - order[b.priority]);
 }
 
+type ReadyForDesignContext = {
+  workflowStatus?: string | null;
+  hasPrd?: boolean;
+  sessionUpdatedAt?: string;
+};
+
+function readyForDesignCopy(
+  graphStatus: string,
+  variant: "noGaps" | "lowPriorityOnly",
+  ctx?: ReadyForDesignContext
+): { title: string; description: string; showGenerateButton: boolean } {
+  if (graphStatus === "completed") {
+    return {
+      title: "PRD generation complete",
+      description:
+        "This session already finished the pipeline. Use the progress steps above to open the PRD and tasks.",
+      showGenerateButton: false
+    };
+  }
+  if (graphStatus === "running") {
+    const ws = ctx?.workflowStatus ?? null;
+    const hasPrd = ctx?.hasPrd ?? false;
+    let description =
+      "The full PRD and later stages run automatically after your brief is validated. Wait for the stepper to advance, or refresh if it stays on this step for several minutes.";
+    if (ws === "prd_generated" || hasPrd) {
+      description =
+        "A PRD is already saved on this session; the run is continuing with task generation, implementation handoff, and exports. Large models can take several minutes.";
+    } else if (ws === "tasks_generated") {
+      description =
+        "Tasks are generated; the pipeline is finishing the implementation handoff and export steps. Refresh in a moment if the stepper has not moved.";
+    } else if (ws === "handoff_prepared") {
+      description = "Handoff artifacts are being finalized. Refresh shortly if the session has not marked complete.";
+    }
+    const updatedMs = ctx?.sessionUpdatedAt ? Date.parse(ctx.sessionUpdatedAt) : NaN;
+    const staleMs = 8 * 60 * 1000;
+    const likelyStalled =
+      !Number.isNaN(updatedMs) &&
+      Date.now() - updatedMs > staleMs &&
+      (hasPrd || ws === "prd_generated" || ws === "tasks_generated" || ws === "handoff_prepared");
+    if (likelyStalled) {
+      description +=
+        " If this stays unchanged, the server run may have exceeded its time limit—check deployment logs (set PIPELINE_DEBUG=1 for checkpoint traces) or continue in a new session.";
+    }
+    return {
+      title: "Pipeline in progress",
+      description,
+      showGenerateButton: false
+    };
+  }
+  if (graphStatus === "failed") {
+    return {
+      title: "Session needs attention",
+      description:
+        "The pipeline reported a failure. Check the session status above or retry from an earlier step if your app offers it. The “Generate full PRD” action only applies while the run is paused for clarifications.",
+      showGenerateButton: false
+    };
+  }
+  const showGenerateButton = graphStatus === "interrupted_for_input";
+  if (variant === "noGaps") {
+    return {
+      title: "Ready for design",
+      description:
+        "No open gaps were recorded. Your project brief is validated—continue to generate the full PRD.",
+      showGenerateButton
+    };
+  }
+  return {
+    title: "Brief validated — no high-priority gaps",
+    description: "Remaining items are lower priority. You can proceed to the full PRD when you are ready.",
+    showGenerateButton
+  };
+}
+
 type GapViewerProps = {
   sessionId: string;
 };
@@ -37,6 +110,7 @@ type ReadyForDesignPanelProps = {
   description: string;
   resumeError: string | null;
   isResuming: boolean;
+  showGenerateButton: boolean;
   onGeneratePRD: () => void;
 };
 
@@ -45,6 +119,7 @@ function ReadyForDesignPanel({
   description,
   resumeError,
   isResuming,
+  showGenerateButton,
   onGeneratePRD
 }: ReadyForDesignPanelProps) {
   return (
@@ -56,15 +131,17 @@ function ReadyForDesignPanel({
           {resumeError}
         </p>
       ) : null}
-      <Button
-        type="button"
-        size="lg"
-        className="mt-4 w-full bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-500 sm:w-auto"
-        disabled={isResuming}
-        onClick={() => void onGeneratePRD()}
-      >
-        {isResuming ? "Drafting full PRD…" : "Generate full PRD"}
-      </Button>
+      {showGenerateButton ? (
+        <Button
+          type="button"
+          size="lg"
+          className="mt-4 w-full bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-500 sm:w-auto"
+          disabled={isResuming}
+          onClick={() => void onGeneratePRD()}
+        >
+          {isResuming ? "Drafting full PRD…" : "Generate full PRD"}
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -195,8 +272,11 @@ export function GapViewer({ sessionId }: GapViewerProps) {
         ) : sorted.length === 0 ? (
           showReadyForDesign ? (
             <ReadyForDesignPanel
-              title="Ready for design"
-              description="No open gaps were recorded. Your project brief is validated—continue to generate the full PRD."
+              {...readyForDesignCopy(state.graphStatus, "noGaps", {
+                workflowStatus: state.workflowStatus,
+                hasPrd: state.hasPrd,
+                sessionUpdatedAt: state.sessionUpdatedAt
+              })}
               resumeError={resumeError}
               isResuming={isResuming}
               onGeneratePRD={onGeneratePRD}
@@ -225,8 +305,11 @@ export function GapViewer({ sessionId }: GapViewerProps) {
             </ul>
             {showReadyForDesign ? (
               <ReadyForDesignPanel
-                title="Brief validated — no high-priority gaps"
-                description="Remaining items are lower priority. You can proceed to the full PRD when you are ready."
+                {...readyForDesignCopy(state.graphStatus, "lowPriorityOnly", {
+                  workflowStatus: state.workflowStatus,
+                  hasPrd: state.hasPrd,
+                  sessionUpdatedAt: state.sessionUpdatedAt
+                })}
                 resumeError={resumeError}
                 isResuming={isResuming}
                 onGeneratePRD={onGeneratePRD}

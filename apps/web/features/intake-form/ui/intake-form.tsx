@@ -1,22 +1,51 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { useBumpSessionHistory } from "@/features/session-history";
+import { extractFigmaFileKeyFromFigmaUrl } from "@/lib/figma-utils";
+import { cn } from "@/lib/utils";
 import { IntakeRequestSchema, IntakeResponseSchema } from "../model/intake.schema";
+
+const SessionHydrationSchema = z.object({
+  hydratedIntake: z.object({
+    intakeText: z.string(),
+    figmaDesignUrl: z.string().optional()
+  }),
+  figmaFileKey: z.string().nullable().optional()
+});
 
 export type IntakeFormProps = {
   /** When set with pipelineSessionId, submits to restart-intake for an existing project session (intake stage). */
   projectId?: string;
   pipelineSessionId?: string;
   initialIntakeText?: string;
+  /** Pre-filled Figma URL from session state (file key expanded to a design URL). */
+  initialFigmaUrl?: string;
 };
 
-export function IntakeForm({ projectId, pipelineSessionId, initialIntakeText = "" }: IntakeFormProps) {
+function resolveFigmaKeyFromInput(figmaInput: string): string | null {
+  const trimmed = figmaInput.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const fromUrl = extractFigmaFileKeyFromFigmaUrl(trimmed);
+  const asRawKey = /^[A-Za-z0-9]+$/.test(trimmed) ? trimmed : null;
+  return fromUrl ?? asRawKey;
+}
+
+function IntakeFormInner({
+  projectId,
+  pipelineSessionId,
+  initialIntakeText = "",
+  initialFigmaUrl = ""
+}: IntakeFormProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const bumpSessionHistory = useBumpSessionHistory();
   const revisionTarget =
     projectId !== undefined && pipelineSessionId !== undefined
@@ -24,11 +53,95 @@ export function IntakeForm({ projectId, pipelineSessionId, initialIntakeText = "
       : null;
   const isProjectRevision = revisionTarget !== null;
   const [intakeText, setIntakeText] = useState(initialIntakeText);
+  const [figmaUrl, setFigmaUrl] = useState(initialFigmaUrl);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     setIntakeText(initialIntakeText);
   }, [initialIntakeText]);
+
+  useEffect(() => {
+    setFigmaUrl(initialFigmaUrl);
+  }, [initialFigmaUrl]);
+
+  /** Hydrate Figma input from checkpoint `stateJson.figmaFileKey` when editing intake for this session. */
+  useEffect(() => {
+    if (!pipelineSessionId) {
+      return;
+    }
+    const uuid = z.string().uuid().safeParse(pipelineSessionId);
+    if (!uuid.success) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/pipeline/session/${pipelineSessionId}`, { cache: "no-store" });
+        const json: unknown = await res.json().catch(() => null);
+        if (!res.ok || cancelled || !json) {
+          return;
+        }
+        const parsed = SessionHydrationSchema.safeParse(json);
+        if (!parsed.success || cancelled) {
+          return;
+        }
+        const key =
+          typeof parsed.data.figmaFileKey === "string" && parsed.data.figmaFileKey.trim().length > 0
+            ? parsed.data.figmaFileKey.trim()
+            : null;
+        if (key) {
+          setFigmaUrl(`https://www.figma.com/design/${encodeURIComponent(key)}/file`);
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pipelineSessionId]);
+
+  useEffect(() => {
+    const urlSessionId = searchParams.get("sessionId");
+    if (!urlSessionId || !pipelineSessionId || urlSessionId !== pipelineSessionId) {
+      return;
+    }
+    const uuid = z.string().uuid().safeParse(urlSessionId);
+    if (!uuid.success) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/pipeline/session/${urlSessionId}`, { cache: "no-store" });
+        const json: unknown = await res.json().catch(() => null);
+        if (!res.ok || cancelled || !json) {
+          return;
+        }
+        const parsed = SessionHydrationSchema.safeParse(json);
+        if (!parsed.success || cancelled) {
+          return;
+        }
+        const { intakeText: nextText, figmaDesignUrl } = parsed.data.hydratedIntake;
+        if (nextText.trim().length > 0) {
+          setIntakeText(nextText.trim());
+        }
+        if (typeof figmaDesignUrl === "string" && figmaDesignUrl.trim().length > 0) {
+          setFigmaUrl(figmaDesignUrl.trim());
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, pipelineSessionId]);
+
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
 
@@ -37,7 +150,21 @@ export function IntakeForm({ projectId, pipelineSessionId, initialIntakeText = "
     setErrorMessage(null);
     setSessionId(null);
 
-    const parsedRequest = IntakeRequestSchema.safeParse({ intakeText });
+    let figmaFileKey: string | undefined;
+    const figmaInput = figmaUrl.trim();
+    if (figmaInput.length > 0) {
+      const resolved = resolveFigmaKeyFromInput(figmaInput);
+      if (!resolved) {
+        setErrorMessage("Enter a valid Figma design, file, or prototype URL (or paste the file key).");
+        return;
+      }
+      figmaFileKey = resolved;
+    }
+
+    const parsedRequest = IntakeRequestSchema.safeParse({
+      intakeText,
+      ...(figmaFileKey ? { figmaFileKey } : {})
+    });
     if (!parsedRequest.success) {
       setErrorMessage(parsedRequest.error.issues[0]?.message ?? "Please provide intake text.");
       return;
@@ -46,15 +173,26 @@ export function IntakeForm({ projectId, pipelineSessionId, initialIntakeText = "
     setIsSubmitting(true);
     try {
       if (revisionTarget) {
+        const body: {
+          projectId: string;
+          intakeText: string;
+          figmaFileKey?: string | null;
+        } = {
+          projectId: revisionTarget.projectId,
+          intakeText: parsedRequest.data.intakeText
+        };
+        if (figmaFileKey) {
+          body.figmaFileKey = figmaFileKey;
+        } else {
+          body.figmaFileKey = "";
+        }
+
         const response = await fetch(`/api/pipeline/session/${revisionTarget.sessionId}/restart-intake`, {
           method: "POST",
           headers: {
             "content-type": "application/json"
           },
-          body: JSON.stringify({
-            projectId: revisionTarget.projectId,
-            intakeText: parsedRequest.data.intakeText
-          })
+          body: JSON.stringify(body)
         });
 
         const json: unknown = await response.json();
@@ -69,7 +207,10 @@ export function IntakeForm({ projectId, pipelineSessionId, initialIntakeText = "
           headers: {
             "content-type": "application/json"
           },
-          body: JSON.stringify(parsedRequest.data)
+          body: JSON.stringify({
+            intakeText: parsedRequest.data.intakeText,
+            figmaFileKey: parsedRequest.data.figmaFileKey ?? ""
+          })
         });
 
         const json: unknown = await response.json();
@@ -85,6 +226,7 @@ export function IntakeForm({ projectId, pipelineSessionId, initialIntakeText = "
 
         setSessionId(parsedResponse.data.sessionId);
         setIntakeText("");
+        setFigmaUrl("");
       }
 
       router.refresh();
@@ -114,6 +256,24 @@ export function IntakeForm({ projectId, pipelineSessionId, initialIntakeText = "
             onChange={(event) => setIntakeText(event.target.value)}
             disabled={isSubmitting}
           />
+          <div className="space-y-2">
+            <label htmlFor="intake-figma-url" className="text-sm font-medium leading-none">
+              Figma URL <span className="font-normal text-muted-foreground">(optional)</span>
+            </label>
+            <input
+              id="intake-figma-url"
+              type="url"
+              inputMode="url"
+              autoComplete="off"
+              placeholder="https://www.figma.com/design/…/…"
+              value={figmaUrl}
+              onChange={(event) => setFigmaUrl(event.target.value)}
+              disabled={isSubmitting}
+              className={cn(
+                "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+              )}
+            />
+          </div>
           <Button type="submit" disabled={isSubmitting}>
             {isSubmitting
               ? isProjectRevision
@@ -136,5 +296,27 @@ export function IntakeForm({ projectId, pipelineSessionId, initialIntakeText = "
         </form>
       </CardContent>
     </Card>
+  );
+}
+
+function IntakeFormFallback() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Intake</CardTitle>
+        <CardDescription>Loading form…</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="h-32 animate-pulse rounded-md bg-muted" />
+      </CardContent>
+    </Card>
+  );
+}
+
+export function IntakeForm(props: IntakeFormProps) {
+  return (
+    <Suspense fallback={<IntakeFormFallback />}>
+      <IntakeFormInner {...props} />
+    </Suspense>
   );
 }

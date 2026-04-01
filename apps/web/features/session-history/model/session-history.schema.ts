@@ -25,5 +25,12 @@ export const SessionHistoryEntrySchema = z.object({
 
 export const SessionHistoryResponseSchema = z.array(SessionHistoryEntrySchema);
 
+/** Wrapped API shape: timeline entries plus ordered clarifications from session state. */
+export const SessionHistoryPayloadSchema = z.object({
+  entries: z.array(SessionHistoryEntrySchema),
+  clarificationRounds: z.array(z.string())
+});
+
 export type SessionHistoryEntry = z.infer<typeof SessionHistoryEntrySchema>;
+export type SessionHistoryPayload = z.infer<typeof SessionHistoryPayloadSchema>;
 export type SessionHistoryItemType = z.infer<typeof SessionHistoryItemTypeSchema>;

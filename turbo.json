@@ -7,7 +7,14 @@
       "env": [
         "NEXT_PUBLIC_SUPABASE_URL",
         "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
-        "ANTHROPIC_API_KEY"
+        "ANTHROPIC_API_KEY",
+        "FIGMA_ACCESS_TOKEN",
+        "LINEAR_API_KEY",
+        "LINEAR_TEAM_ID",
+        "LINEAR_TEAM_NAME",
+        "LINEAR_WORKSPACE_URL",
+        "NEXT_PUBLIC_LINEAR_WORKSPACE_URL",
+        "NEXT_PUBLIC_LINEAR_TEAM_ID"
       ]
     }
   }
