@@ -6,6 +6,19 @@ import { requireFigmaAccessToken } from "../env";
 
 const FIGMA_API_BASE = "https://api.figma.com/v1";
 
+/** Pipeline tracing — filter logs with `[figma]` */
+function figmaTrace(step: string, detail?: Record<string, unknown>): void {
+  if (detail !== undefined) {
+    console.log(`[figma] ${step}`, detail);
+  } else {
+    console.log(`[figma] ${step}`);
+  }
+}
+
+function countCanvasPages(document: FigmaFileNode): number {
+  return (document.children ?? []).filter((c) => c.type === "CANVAS").length;
+}
+
 /** Minimal Figma file node (GET /v1/files/:key document subtree). */
 export type FigmaFileNode = {
   id: string;
@@ -44,10 +57,23 @@ export type FigmaFileMetadata = {
   document: FigmaFileNode;
   styles: FigmaFileStyle[];
   components: FigmaFileComponent[];
+  frameAnalysis: {
+    commonCornerRadii: number[];
+    shadowEffects: string[];
+    commonItemSpacing: number[];
+    commonMaxWidths: number[];
+  };
+  /** How the UI Kit page was chosen and loaded (REST shallow file + nodes ≈ MCP discovery + deep tree). */
+  uiKitExtraction?: {
+    targetedPageName: string;
+    selectionReason: string;
+    readMethod: string;
+  };
 };
 
 export type FigmaClient = {
-  getFile: (fileKey: string) => Promise<FigmaFileResponse>;
+  getFile: (fileKey: string, options?: { depth?: number }) => Promise<FigmaFileResponse>;
+  getFileNode: (fileKey: string, nodeId: string) => Promise<FigmaFileNode | null>;
   getFileStyles: (fileKey: string) => Promise<{ styles: FigmaFileStyle[]; components: FigmaFileComponent[] }>;
 };
 
@@ -59,6 +85,90 @@ function buildFigmaDesignUrl(fileKey: string, fileName: string, nodeId: string):
 
 function isCanvas(node: FigmaFileNode): boolean {
   return node.type === "CANVAS";
+}
+
+export type FigmaUiKitTargetPage = {
+  pageId: string;
+  pageName: string;
+  selectionReason: string;
+};
+
+/**
+ * Picks the canvas used for UI Kit extraction (spec FR-002 / FR-003): UI Kit / Design System / Styles / Tokens,
+ * then Main, then Desktop, else first page.
+ */
+export function resolveFigmaUiKitTargetPage(document: FigmaFileNode): FigmaUiKitTargetPage {
+  const pages = (document.children ?? []).filter((child) => child.type === "CANVAS");
+  figmaTrace("resolveFigmaUiKitTargetPage: canvas count", { canvasCount: pages.length, pageNames: pages.map((p) => p.name) });
+  if (pages.length === 0) {
+    figmaTrace("resolveFigmaUiKitTargetPage: no pages", { selectionReason: "no-canvas-pages" });
+    return { pageId: "", pageName: "", selectionReason: "no-canvas-pages" };
+  }
+  const kitPattern = /(ui\s*kit|design\s*system|styles|tokens)/i;
+  for (const page of pages) {
+    if (kitPattern.test(page.name)) {
+      const out = { pageId: page.id, pageName: page.name, selectionReason: "matched-ui-kit-or-design-system" as const };
+      figmaTrace("resolveFigmaUiKitTargetPage: selected", out);
+      return out;
+    }
+  }
+  for (const candidate of ["Main", "Desktop"] as const) {
+    const found = pages.find((p) => p.name.trim().toLowerCase() === candidate.toLowerCase());
+    if (found) {
+      const out = { pageId: found.id, pageName: found.name, selectionReason: `fallback-page-${candidate.toLowerCase()}` as const };
+      figmaTrace("resolveFigmaUiKitTargetPage: selected", out);
+      return out;
+    }
+  }
+  const first = pages[0]!;
+  const out = { pageId: first.id, pageName: first.name, selectionReason: "fallback-first-canvas" as const };
+  figmaTrace("resolveFigmaUiKitTargetPage: selected", out);
+  return out;
+}
+
+/** Extract Figma file key from a design URL (uses branch key when URL contains `/branch/:branchKey/`, per Figma MCP rules). */
+export function extractFigmaFileKeyFromUrl(url: string): string | null {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    figmaTrace("extractFigmaFileKeyFromUrl: empty input", {});
+    return null;
+  }
+  const branchMatch = trimmed.match(/figma\.com\/design\/[A-Za-z0-9]+\/branch\/([A-Za-z0-9]+)/i);
+  if (branchMatch?.[1]) {
+    figmaTrace("extractFigmaFileKeyFromUrl: branch key", { fileKey: branchMatch[1], urlPreview: trimmed.slice(0, 120) });
+    return branchMatch[1];
+  }
+  const match = trimmed.match(/figma\.com\/(?:design|file|proto)\/([A-Za-z0-9]+)(?:\/|$|[?#])/i);
+  const key = match?.[1] ?? null;
+  figmaTrace("extractFigmaFileKeyFromUrl: result", { fileKey: key, urlPreview: trimmed.slice(0, 120) });
+  return key;
+}
+
+/**
+ * Verifies the file is readable with shallow depth (same discovery surface as MCP `get_metadata` overview).
+ * Used by the pipeline before treating Figma as design truth.
+ */
+export async function verifyFigmaDesignAccessible(fileKey: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const key = fileKey.trim();
+    figmaTrace("verifyFigmaDesignAccessible: start", { fileKey: key || "(empty)" });
+    if (!key) {
+      figmaTrace("verifyFigmaDesignAccessible: failed", { reason: "empty-key" });
+      return { ok: false, error: "Empty Figma file key." };
+    }
+    const client = createFigmaClient();
+    const file = await client.getFile(key, { depth: 1 });
+    figmaTrace("verifyFigmaDesignAccessible: success", {
+      fileName: file.name,
+      canvasCount: countCanvasPages(file.document),
+      topLevelChildTypes: (file.document.children ?? []).slice(0, 12).map((c) => c.type)
+    });
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    figmaTrace("verifyFigmaDesignAccessible: error", { error: message });
+    return { ok: false, error: message };
+  }
 }
 
 function collectTopLevelFrames(canvas: FigmaFileNode, fileKey: string, fileName: string): DesignNode[] {
@@ -147,6 +257,17 @@ export function mapFigmaFileToDesignMap(metadata: FigmaFileMetadata): DesignMap 
 
   collectComponentNodes(document, fileKey, fileName, nodes, false);
 
+  const byType = nodes.reduce<Record<string, number>>((acc, n) => {
+    acc[n.nodeType] = (acc[n.nodeType] ?? 0) + 1;
+    return acc;
+  }, {});
+  figmaTrace("mapFigmaFileToDesignMap: built", {
+    fileKey,
+    fileName,
+    totalNodes: nodes.length,
+    byNodeType: byType
+  });
+
   return DesignMapSchema.parse({
     nodes,
     links: []
@@ -154,7 +275,9 @@ export function mapFigmaFileToDesignMap(metadata: FigmaFileMetadata): DesignMap 
 }
 
 async function figmaFetchJson(path: string, token: string): Promise<unknown> {
-  const response = await fetch(`${FIGMA_API_BASE}${path}`, {
+  const url = `${FIGMA_API_BASE}${path}`;
+  figmaTrace("API request", { path: path.split("?")[0], hasQuery: path.includes("?") });
+  const response = await fetch(url, {
     headers: {
       "X-Figma-Token": token
     }
@@ -162,9 +285,11 @@ async function figmaFetchJson(path: string, token: string): Promise<unknown> {
 
   if (!response.ok) {
     const body = await response.text();
+    figmaTrace("API error response", { status: response.status, statusText: response.statusText, bodyPreview: body.slice(0, 400) });
     throw new Error(`Figma API ${response.status} ${response.statusText}: ${body.slice(0, 500)}`);
   }
 
+  figmaTrace("API response OK", { path: path.split("?")[0], status: response.status });
   return response.json() as Promise<unknown>;
 }
 
@@ -197,7 +322,7 @@ function toHexComponent(value: number): string {
   return clamped.toString(16).padStart(2, "0").toUpperCase();
 }
 
-function figmaRgbToHex(color: Record<string, unknown>, alpha?: unknown): string | null {
+export function figmaRgbToHex(color: Record<string, unknown>, alpha?: unknown): string | null {
   const r = color.r;
   const g = color.g;
   const b = color.b;
@@ -222,6 +347,98 @@ function parseHexCandidate(value: string): string | null {
     return null;
   }
   return trimmed.startsWith("#") ? trimmed.toUpperCase() : `#${trimmed.toUpperCase()}`;
+}
+
+function readNumber(record: Record<string, unknown>, key: string): number | null {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function pushCount(map: Map<number, number>, value: number | null): void {
+  if (value === null) {
+    return;
+  }
+  const normalized = Math.round(value * 100) / 100;
+  map.set(normalized, (map.get(normalized) ?? 0) + 1);
+}
+
+function topValuesByCount(map: Map<number, number>, limit = 3): number[] {
+  return Array.from(map.entries())
+    .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+    .slice(0, limit)
+    .map(([value]) => value);
+}
+
+function toAlphaRounded(value: number): string {
+  return `${Math.round(value * 1000) / 1000}`;
+}
+
+function figmaShadowToTailwind(effect: Record<string, unknown>): string | null {
+  const effectType = optionalString(effect, "type");
+  if (effectType !== "DROP_SHADOW") {
+    return null;
+  }
+  const offset = isRecord(effect.offset) ? effect.offset : null;
+  const radius = readNumber(effect, "radius") ?? 0;
+  const spread = readNumber(effect, "spread") ?? 0;
+  const x = (offset && readNumber(offset, "x")) ?? 0;
+  const y = (offset && readNumber(offset, "y")) ?? 0;
+  const colorRecord = isRecord(effect.color) ? effect.color : null;
+  const colorHex = colorRecord ? figmaRgbToHex(colorRecord, colorRecord.a ?? effect.opacity) : null;
+  if (!colorHex) {
+    return null;
+  }
+  if (colorHex.length === 9) {
+    const rgb = colorHex.slice(1, 7);
+    const alphaHex = colorHex.slice(7, 9);
+    const alpha = parseInt(alphaHex, 16) / 255;
+    const r = parseInt(rgb.slice(0, 2), 16);
+    const g = parseInt(rgb.slice(2, 4), 16);
+    const b = parseInt(rgb.slice(4, 6), 16);
+    return `${x}px ${y}px ${radius}px ${spread}px rgb(${r} ${g} ${b} / ${toAlphaRounded(alpha)})`;
+  }
+  return `${x}px ${y}px ${radius}px ${spread}px ${colorHex}`;
+}
+
+function analyzeFrameTokens(document: FigmaFileNode): FigmaFileMetadata["frameAnalysis"] {
+  const radiusCounts = new Map<number, number>();
+  const spacingCounts = new Map<number, number>();
+  const maxWidthCounts = new Map<number, number>();
+  const shadowSet = new Set<string>();
+
+  const walk = (node: FigmaFileNode): void => {
+    const nodeRecord = node as unknown as Record<string, unknown>;
+    if (node.type === "FRAME") {
+      pushCount(radiusCounts, readNumber(nodeRecord, "cornerRadius"));
+      pushCount(spacingCounts, readNumber(nodeRecord, "itemSpacing"));
+      pushCount(maxWidthCounts, readNumber(nodeRecord, "maxWidth"));
+
+      const absoluteBoundingBox = isRecord(nodeRecord.absoluteBoundingBox) ? nodeRecord.absoluteBoundingBox : null;
+      pushCount(maxWidthCounts, absoluteBoundingBox ? readNumber(absoluteBoundingBox, "width") : null);
+
+      const effects = Array.isArray(nodeRecord.effects) ? nodeRecord.effects : [];
+      for (const effect of effects) {
+        if (!isRecord(effect)) {
+          continue;
+        }
+        const shadow = figmaShadowToTailwind(effect);
+        if (shadow) {
+          shadowSet.add(shadow);
+        }
+      }
+    }
+    for (const child of node.children ?? []) {
+      walk(child);
+    }
+  };
+
+  walk(document);
+  return {
+    commonCornerRadii: topValuesByCount(radiusCounts),
+    shadowEffects: Array.from(shadowSet),
+    commonItemSpacing: topValuesByCount(spacingCounts),
+    commonMaxWidths: topValuesByCount(maxWidthCounts)
+  };
 }
 
 function extractHexFromUnknown(value: unknown): string | undefined {
@@ -349,15 +566,61 @@ function parseFigmaStylesResponse(raw: unknown): { styles: FigmaFileStyle[]; com
  */
 export function createFigmaClient(): FigmaClient {
   return {
-    async getFile(fileKey: string): Promise<FigmaFileResponse> {
+    async getFile(fileKey: string, options?: { depth?: number }): Promise<FigmaFileResponse> {
       const token = requireFigmaAccessToken();
       const key = fileKey.trim();
       if (!key) {
         throw new Error("Figma file key cannot be empty.");
       }
+      const depth =
+        typeof options?.depth === "number" && Number.isFinite(options.depth) && options.depth > 0 ? Math.floor(options.depth) : undefined;
+      figmaTrace("getFile: start", { fileKey: key, depth: depth ?? "full (no depth param)" });
       const query = new URLSearchParams({ geometry: "omit" });
+      if (depth !== undefined) {
+        query.set("depth", `${depth}`);
+      }
       const raw = await figmaFetchJson(`/files/${encodeURIComponent(key)}?${query}`, token);
-      return parseFigmaFileResponse(raw);
+      const parsed = parseFigmaFileResponse(raw);
+      const rootChildren = parsed.document.children ?? [];
+      figmaTrace("getFile: parsed", {
+        fileKey: key,
+        fileName: parsed.name,
+        depth: depth ?? "full",
+        rootChildCount: rootChildren.length,
+        canvasCount: countCanvasPages(parsed.document),
+        sampleRootTypes: rootChildren.slice(0, 8).map((c) => `${c.type}:${c.name?.slice(0, 40) ?? ""}`)
+      });
+      return parsed;
+    },
+    async getFileNode(fileKey: string, nodeId: string): Promise<FigmaFileNode | null> {
+      const token = requireFigmaAccessToken();
+      const key = fileKey.trim();
+      const id = nodeId.trim();
+      if (!key || !id) {
+        throw new Error("Figma file key and node id cannot be empty.");
+      }
+      figmaTrace("getFileNode: start", { fileKey: key, nodeId: id });
+      const query = new URLSearchParams({ ids: id, geometry: "omit" });
+      const raw = await figmaFetchJson(`/files/${encodeURIComponent(key)}/nodes?${query}`, token);
+      if (!isRecord(raw) || !isRecord(raw.nodes)) {
+        figmaTrace("getFileNode: missing nodes map in response", { fileKey: key, nodeId: id });
+        return null;
+      }
+      const nodeIdsInResponse = Object.keys(raw.nodes);
+      const nodeEntry = raw.nodes[id];
+      if (!isRecord(nodeEntry) || !isRecord(nodeEntry.document)) {
+        figmaTrace("getFileNode: no document for id", { fileKey: key, nodeId: id, nodeIdsInResponse });
+        return null;
+      }
+      const doc = nodeEntry.document as FigmaFileNode;
+      figmaTrace("getFileNode: loaded subtree", {
+        fileKey: key,
+        nodeId: id,
+        rootName: doc.name,
+        rootType: doc.type,
+        childCount: doc.children?.length ?? 0
+      });
+      return doc;
     },
     async getFileStyles(fileKey: string): Promise<{ styles: FigmaFileStyle[]; components: FigmaFileComponent[] }> {
       const token = requireFigmaAccessToken();
@@ -365,8 +628,19 @@ export function createFigmaClient(): FigmaClient {
       if (!key) {
         throw new Error("Figma file key cannot be empty.");
       }
+      figmaTrace("getFileStyles: start", { fileKey: key });
       const raw = await figmaFetchJson(`/files/${encodeURIComponent(key)}/styles`, token);
-      return parseFigmaStylesResponse(raw);
+      const parsed = parseFigmaStylesResponse(raw);
+      const styleSample = parsed.styles.slice(0, 5).map((s) => ({ name: s.name, styleType: s.styleType, hex: s.hex }));
+      const componentSample = parsed.components.slice(0, 5).map((c) => ({ name: c.name }));
+      figmaTrace("getFileStyles: parsed", {
+        fileKey: key,
+        styleCount: parsed.styles.length,
+        componentCount: parsed.components.length,
+        styleSample,
+        componentSample
+      });
+      return parsed;
     }
   };
 }
@@ -376,14 +650,60 @@ export function createFigmaClient(): FigmaClient {
  * Uses `geometry=omit` to avoid heavy vector data.
  */
 export async function getFigmaFileMetadata(fileKey: string): Promise<FigmaFileMetadata> {
+  const trimmedKey = fileKey.trim();
+  figmaTrace("getFigmaFileMetadata: start", { fileKey: trimmedKey });
   requireFigmaAccessToken();
   const client = createFigmaClient();
-  const [file, styleBundle] = await Promise.all([client.getFile(fileKey), client.getFileStyles(fileKey)]);
-  return {
-    fileKey: fileKey.trim(),
-    fileName: file.name,
-    document: file.document,
+  figmaTrace("getFigmaFileMetadata: parallel shallow file + styles", { fileKey: trimmedKey });
+  const [shallowFile, styleBundle] = await Promise.all([client.getFile(fileKey, { depth: 1 }), client.getFileStyles(fileKey)]);
+  figmaTrace("getFigmaFileMetadata: shallow + styles done", {
+    fileKey: trimmedKey,
+    fileName: shallowFile.name,
+    styleCount: styleBundle.styles.length,
+    componentCount: styleBundle.components.length
+  });
+  const target = resolveFigmaUiKitTargetPage(shallowFile.document);
+  const readMethod = "rest_deep_page_discovery";
+  const deepPage = target.pageId ? await client.getFileNode(fileKey, target.pageId) : null;
+  const resolvedDocument = deepPage ?? shallowFile.document;
+  figmaTrace("getFigmaFileMetadata: document resolved", {
+    fileKey: trimmedKey,
+    usedDeepPage: Boolean(deepPage),
+    resolvedRootType: resolvedDocument.type,
+    resolvedRootName: resolvedDocument.name,
+    resolvedChildCount: resolvedDocument.children?.length ?? 0
+  });
+  const frameAnalysis = analyzeFrameTokens(resolvedDocument);
+  figmaTrace("getFigmaFileMetadata: frameAnalysis", {
+    fileKey: trimmedKey,
+    commonCornerRadii: frameAnalysis.commonCornerRadii,
+    commonItemSpacing: frameAnalysis.commonItemSpacing,
+    commonMaxWidths: frameAnalysis.commonMaxWidths,
+    shadowEffectCount: frameAnalysis.shadowEffects.length
+  });
+  const uiKitExtraction =
+    target.pageId && target.pageName
+      ? {
+          targetedPageName: target.pageName,
+          selectionReason: target.selectionReason,
+          readMethod
+        }
+      : undefined;
+  const metadata: FigmaFileMetadata = {
+    fileKey: trimmedKey,
+    fileName: shallowFile.name,
+    document: resolvedDocument,
     styles: styleBundle.styles,
-    components: styleBundle.components
+    components: styleBundle.components,
+    frameAnalysis,
+    uiKitExtraction
   };
+  figmaTrace("getFigmaFileMetadata: complete", {
+    fileKey: trimmedKey,
+    fileName: metadata.fileName,
+    styles: metadata.styles.length,
+    components: metadata.components.length,
+    uiKitExtraction: metadata.uiKitExtraction ?? null
+  });
+  return metadata;
 }

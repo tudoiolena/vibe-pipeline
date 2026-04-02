@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createPipelineGraph, createSessionConfig, pipelineDebug } from "@vibe/ai/graph";
 import { createClient, createProject, createProjectSession, updateProjectSessionById } from "@vibe/database";
+import { extractFigmaFileKeyFromUrl } from "@vibe/integrations";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -38,6 +39,28 @@ function toProjectName(value: string): string {
   return tokens.map((token) => token.slice(0, 1).toUpperCase() + token.slice(1)).join(" ");
 }
 
+/**
+ * Resolves a Figma file key from raw intake when the client did not pass `figmaFileKey`.
+ * Matches `figma.com/design/:key` (and branch URLs) the same way as {@link extractFigmaFileKeyFromUrl}.
+ */
+function extractFigmaFileKeyFromIntakeText(text: string): string | undefined {
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"')]+/gi)) {
+    const key = extractFigmaFileKeyFromUrl(match[0]);
+    if (key) {
+      return key;
+    }
+  }
+  const branchMatch = text.match(/figma\.com\/design\/[A-Za-z0-9]+\/branch\/([A-Za-z0-9]+)/i);
+  if (branchMatch?.[1]) {
+    return branchMatch[1];
+  }
+  const designMatch = text.match(/figma\.com\/(?:design|file|proto)\/([A-Za-z0-9]+)(?:\/|[\s?"'#]|$)/i);
+  if (designMatch?.[1]) {
+    return designMatch[1];
+  }
+  return undefined;
+}
+
 export async function POST(request: Request) {
   const requestJson: unknown = await request.json().catch(() => null);
   const parsedBody = PipelineRequestSchema.safeParse(requestJson);
@@ -48,7 +71,13 @@ export async function POST(request: Request) {
 
   const intakeText = parsedBody.data.intakeText.trim();
   const figmaRaw = parsedBody.data.figmaFileKey?.trim();
-  const figmaFileKey = figmaRaw && figmaRaw.length > 0 ? figmaRaw : undefined;
+  let figmaFileKey = figmaRaw && figmaRaw.length > 0 ? figmaRaw : undefined;
+  if (!figmaFileKey) {
+    const fromText = extractFigmaFileKeyFromIntakeText(intakeText);
+    if (fromText) {
+      figmaFileKey = fromText;
+    }
+  }
   const client = createClient();
 
   const sessionStateJson: Record<string, string> = { rawIntakeText: intakeText };

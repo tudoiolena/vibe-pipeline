@@ -78,6 +78,8 @@ const STAGE_LABELS: Record<string, string> = {
 
 type PrdReadModeProps = {
   prd: PRD;
+  /** When false, user stories / assumptions / risks show loading skeletons (e.g. PRD node not finished). */
+  prdNodeComplete?: boolean;
   sessionId?: string;
   projectId?: string;
   taskTree?: TaskTree | null;
@@ -89,8 +91,21 @@ type PrdReadModeProps = {
   defaultLinearTeamId?: string;
 };
 
+function TableSkeletonRow({ cols }: { cols: number }) {
+  return (
+    <tr className="border-t border-border">
+      {Array.from({ length: cols }).map((_, i) => (
+        <td key={i} className="px-3 py-2">
+          <div className="h-4 w-full max-w-48 animate-pulse rounded bg-muted" />
+        </td>
+      ))}
+    </tr>
+  );
+}
+
 export function PrdReadMode({
   prd,
+  prdNodeComplete = true,
   sessionId,
   projectId,
   taskTree,
@@ -358,20 +373,34 @@ export function PrdReadMode({
                     <thead className="bg-muted/50 text-left">
                       <tr>
                         <th className="px-3 py-2 font-medium">ID</th>
-                        <th className="px-3 py-2 font-medium">As a</th>
-                        <th className="px-3 py-2 font-medium">I want</th>
-                        <th className="px-3 py-2 font-medium">So that</th>
+                        <th className="px-3 py-2 font-medium">Persona</th>
+                        <th className="px-3 py-2 font-medium">Intent</th>
+                        <th className="px-3 py-2 font-medium">Benefit</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {prd.userStories.map((us) => (
-                        <tr key={us.id} className="border-t border-border">
-                          <td className="px-3 py-2 font-mono text-xs">{us.id}</td>
-                          <td className="px-3 py-2">{us.asA}</td>
-                          <td className="px-3 py-2">{us.iWant}</td>
-                          <td className="px-3 py-2">{us.soThat}</td>
+                      {!prdNodeComplete ? (
+                        <>
+                          <TableSkeletonRow cols={4} />
+                          <TableSkeletonRow cols={4} />
+                          <TableSkeletonRow cols={4} />
+                        </>
+                      ) : prd.userStories.length === 0 ? (
+                        <tr className="border-t border-border">
+                          <td colSpan={4} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                            No user stories yet. The PRD may still be generating.
+                          </td>
                         </tr>
-                      ))}
+                      ) : (
+                        prd.userStories.map((us) => (
+                          <tr key={us.id} className="border-t border-border">
+                            <td className="px-3 py-2 font-mono text-xs">{us.id}</td>
+                            <td className="px-3 py-2">{us.persona}</td>
+                            <td className="px-3 py-2">{us.intent}</td>
+                            <td className="px-3 py-2">{us.benefit}</td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -425,20 +454,66 @@ export function PrdReadMode({
 
               <section className="space-y-3">
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Assumptions</h2>
-                <ul className="list-inside list-disc space-y-1.5 text-foreground/90 marker:text-primary">
-                  {prd.assumptions.map((a) => (
-                    <li key={a}>{a}</li>
-                  ))}
-                </ul>
+                {!prdNodeComplete ? (
+                  <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+                    <div className="h-3 w-full animate-pulse rounded bg-muted" />
+                    <div className="h-3 w-5/6 animate-pulse rounded bg-muted" />
+                    <div className="h-3 w-4/6 animate-pulse rounded bg-muted" />
+                  </div>
+                ) : prd.assumptions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No assumptions listed yet.</p>
+                ) : (
+                  <div className="overflow-x-auto rounded-md border border-border">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-muted/50 text-left">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">Description</th>
+                          <th className="px-3 py-2 font-medium">Mitigation</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {prd.assumptions.map((a) => (
+                          <tr key={`${a.description.slice(0, 48)}-${a.mitigation.slice(0, 24)}`} className="border-t border-border">
+                            <td className="px-3 py-2 align-top text-foreground/90">{a.description}</td>
+                            <td className="px-3 py-2 align-top text-foreground/90">{a.mitigation}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </section>
 
               <section className="space-y-3 pb-4">
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Risks</h2>
-                <ul className="list-inside list-disc space-y-1.5 text-foreground/90 marker:text-primary">
-                  {prd.risks.map((r) => (
-                    <li key={r}>{r}</li>
-                  ))}
-                </ul>
+                {!prdNodeComplete ? (
+                  <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+                    <div className="h-3 w-full animate-pulse rounded bg-muted" />
+                    <div className="h-3 w-5/6 animate-pulse rounded bg-muted" />
+                    <div className="h-3 w-4/6 animate-pulse rounded bg-muted" />
+                  </div>
+                ) : prd.risks.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No risks listed yet.</p>
+                ) : (
+                  <div className="overflow-x-auto rounded-md border border-border">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-muted/50 text-left">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">Description</th>
+                          <th className="px-3 py-2 font-medium">Impact</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {prd.risks.map((r) => (
+                          <tr key={`${r.description.slice(0, 48)}-${r.impact.slice(0, 24)}`} className="border-t border-border">
+                            <td className="px-3 py-2 align-top text-foreground/90">{r.description}</td>
+                            <td className="px-3 py-2 align-top text-foreground/90">{r.impact}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </section>
             </article>
             </div>

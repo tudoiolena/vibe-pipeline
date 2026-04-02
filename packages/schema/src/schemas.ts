@@ -45,11 +45,31 @@ export const BriefSchema = z.object({
 
 export const UserStorySchema = z.object({
   id: z.string().min(1),
-  asA: z.string().min(1),
-  iWant: z.string().min(1),
-  soThat: z.string().min(1),
+  persona: z.string().min(1),
+  intent: z.string().min(1),
+  benefit: z.string().min(1),
   acceptanceHints: z.array(z.string().min(1)).default([])
 });
+
+export const AssumptionSchema = z.preprocess((raw) => {
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    return { description: raw.trim(), mitigation: "To be validated with stakeholders." };
+  }
+  return raw;
+}, z.object({
+  description: z.string().min(1),
+  mitigation: z.string().min(1)
+}));
+
+export const RiskSchema = z.preprocess((raw) => {
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    return { description: raw.trim(), impact: "To be assessed during planning." };
+  }
+  return raw;
+}, z.object({
+  description: z.string().min(1),
+  impact: z.string().min(1)
+}));
 
 export const FunctionalRequirementSchema = z.object({
   id: z.string().min(1),
@@ -75,8 +95,8 @@ export const PRDSchema = z.object({
   functionalRequirements: z.array(FunctionalRequirementSchema).default([]),
   nonFunctionalRequirements: z.array(z.string().min(1)).default([]),
   techStack: z.array(TechStackItemSchema).default([]),
-  assumptions: z.array(z.string().min(1)).default([]),
-  risks: z.array(z.string().min(1)).default([]),
+  assumptions: z.array(AssumptionSchema).default([]),
+  risks: z.array(RiskSchema).default([]),
   userStories: z.array(UserStorySchema).default([])
 });
 
@@ -183,8 +203,43 @@ export const UIComponentSchema = z.object({
   description: z.string().optional()
 });
 
+export const UISpacingTokenSchema = z.object({
+  name: z.string().min(1),
+  value: z.union([z.string(), z.number()]),
+  figmaSource: z.string().optional(),
+  description: z.string().optional()
+});
+
+export const UIRadiusTokenSchema = z.object({
+  name: z.string().min(1),
+  value: z.union([z.string(), z.number()]),
+  figmaSource: z.string().optional(),
+  description: z.string().optional()
+});
+
+export const UIEffectTokenSchema = z.object({
+  name: z.string().min(1),
+  value: z.string().min(1),
+  figmaSource: z.string().optional(),
+  description: z.string().optional()
+});
+
+export const UIKitFigmaExtractionSchema = z.object({
+  /** Same intent as Figma MCP file reads; server-side pipeline uses the authorized REST adapter in @vibe/integrations. */
+  readMethod: z.string().min(1),
+  targetedPageName: z.string().optional(),
+  selectionReason: z.string().optional(),
+  fileKey: z.string().optional()
+});
+
 export const UIKitSchema = z.object({
   colorPalette: z.array(UIColorTokenSchema).default([]),
   typography: z.array(UITypographyTokenSchema).default([]),
-  componentInventory: z.array(UIComponentSchema).default([])
+  componentInventory: z.array(UIComponentSchema).default([]),
+  spacing: z.array(UISpacingTokenSchema).default([]),
+  radii: z.array(UIRadiusTokenSchema).default([]),
+  effects: z.array(UIEffectTokenSchema).default([]),
+  /** Present when layer / text samples suggest German UI copy (e.g. Anmelden, Konto). */
+  detectedLocale: z.enum(["de", "en", "unknown"]).optional(),
+  figmaExtraction: UIKitFigmaExtractionSchema.optional()
 });

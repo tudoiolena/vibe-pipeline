@@ -191,7 +191,7 @@ export type Database = {
           category: "roles" | "nfr" | "edge_case" | "integration" | "security" | "scope" | "data" | "workflow";
           priority: "low" | "medium" | "high" | "critical";
           answer_text: string | null;
-          status: "open" | "answered" | "resolved" | "dismissed";
+          status: "open" | "answered" | "resolved" | "dismissed" | "pending";
           created_at: string;
           updated_at: string;
         };
@@ -204,7 +204,7 @@ export type Database = {
           category: "roles" | "nfr" | "edge_case" | "integration" | "security" | "scope" | "data" | "workflow";
           priority?: "low" | "medium" | "high" | "critical";
           answer_text?: string | null;
-          status?: "open" | "answered" | "resolved" | "dismissed";
+          status?: "open" | "answered" | "resolved" | "dismissed" | "pending";
           created_at?: string;
           updated_at?: string;
         };
@@ -217,7 +217,7 @@ export type Database = {
           category?: "roles" | "nfr" | "edge_case" | "integration" | "security" | "scope" | "data" | "workflow";
           priority?: "low" | "medium" | "high" | "critical";
           answer_text?: string | null;
-          status?: "open" | "answered" | "resolved" | "dismissed";
+          status?: "open" | "answered" | "resolved" | "dismissed" | "pending";
           created_at?: string;
           updated_at?: string;
         };
@@ -431,6 +431,7 @@ export type Database = {
           node_type: string;
           node_name: string;
           figma_url: string | null;
+          origin: "figma" | "synthetic" | "manual";
           raw_payload: Json;
           created_at: string;
           updated_at: string;
@@ -443,6 +444,7 @@ export type Database = {
           node_type: string;
           node_name: string;
           figma_url?: string | null;
+          origin?: "figma" | "synthetic" | "manual";
           raw_payload?: Json;
           created_at?: string;
           updated_at?: string;
@@ -455,6 +457,7 @@ export type Database = {
           node_type?: string;
           node_name?: string;
           figma_url?: string | null;
+          origin?: "figma" | "synthetic" | "manual";
           raw_payload?: Json;
           created_at?: string;
           updated_at?: string;

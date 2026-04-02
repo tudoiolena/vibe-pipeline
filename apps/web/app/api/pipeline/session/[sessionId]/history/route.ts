@@ -30,6 +30,7 @@ type HistoryEntry = {
   gapCountBefore: number | null;
   hasGapAnalysis: boolean;
   gaps: z.infer<typeof GapSchema>[];
+  figmaLinkVerified: boolean | null;
 };
 
 type RawRow = {
@@ -48,6 +49,29 @@ function parseEnvelope(stateJson: unknown): PersistedCheckpointEnvelope | null {
     return null;
   }
   return candidate as PersistedCheckpointEnvelope;
+}
+
+const ClarificationTimelineEventSchema = z.discriminatedUnion("kind", [
+  z.object({ at: z.string(), kind: z.literal("figma_verified"), fileKey: z.string().optional() }),
+  z.object({ at: z.string(), kind: z.literal("figma_failed"), error: z.string().optional() }),
+  z.object({ at: z.string(), kind: z.literal("clarifications_merged_into_brief") })
+]);
+
+function clarificationTimelineFromSessionStateJson(sessionStateJson: Json): z.infer<typeof ClarificationTimelineEventSchema>[] {
+  const envelope = parseEnvelope(sessionStateJson);
+  const raw = envelope?.pipelineState?.stateJson as Record<string, unknown> | undefined;
+  const tl = raw?.clarificationTimestamps;
+  if (!Array.isArray(tl)) {
+    return [];
+  }
+  const out: z.infer<typeof ClarificationTimelineEventSchema>[] = [];
+  for (const item of tl) {
+    const parsed = ClarificationTimelineEventSchema.safeParse(item);
+    if (parsed.success) {
+      out.push(parsed.data);
+    }
+  }
+  return out;
 }
 
 function clarificationRoundsFromSessionStateJson(sessionStateJson: Json): string[] {
@@ -166,6 +190,18 @@ function isBriefUpdateRow(row: RawRow): boolean {
   return briefUpdateFromPipelineStateJson(row.pipeline_state_json) !== null;
 }
 
+function figmaLinkVerifiedFromPipelineStateJson(pipelineStateJson: Json): boolean | null {
+  if (!pipelineStateJson || typeof pipelineStateJson !== "object" || Array.isArray(pipelineStateJson)) {
+    return null;
+  }
+  const stateJson = (pipelineStateJson as { stateJson?: unknown }).stateJson;
+  if (!stateJson || typeof stateJson !== "object" || Array.isArray(stateJson)) {
+    return null;
+  }
+  const v = (stateJson as Record<string, unknown>).figmaLinkVerified;
+  return typeof v === "boolean" ? v : null;
+}
+
 function milestoneFromLatestState(pipelineStateJson: Json): { is: boolean; label: string | null } {
   if (!pipelineStateJson || typeof pipelineStateJson !== "object" || Array.isArray(pipelineStateJson)) {
     return { is: false, label: null };
@@ -268,7 +304,8 @@ function mergedEntryFromGroup(group: RawRow[]): HistoryEntry {
       gapCount: 0,
       gapCountBefore: null,
       hasGapAnalysis: false,
-      gaps: []
+      gaps: [],
+      figmaLinkVerified: null
     };
   }
 
@@ -298,7 +335,8 @@ function mergedEntryFromGroup(group: RawRow[]): HistoryEntry {
     gapCount: gaps.length,
     gapCountBefore: null,
     hasGapAnalysis,
-    gaps
+    gaps,
+    figmaLinkVerified: figmaLinkVerifiedFromPipelineStateJson(pipelineStateJson)
   };
 }
 
@@ -342,6 +380,7 @@ export async function GET(_request: Request, context: { params: Promise<{ sessio
   assignGapCountBefore(mergedChrono);
   const newestFirst = [...mergedChrono].reverse();
   const clarificationRounds = clarificationRoundsFromSessionStateJson(session.state_json);
+  const clarificationTimeline = clarificationTimelineFromSessionStateJson(session.state_json);
 
-  return NextResponse.json({ entries: newestFirst, clarificationRounds });
+  return NextResponse.json({ entries: newestFirst, clarificationRounds, clarificationTimeline });
 }

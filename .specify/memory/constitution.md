@@ -1,24 +1,22 @@
 <!--
 Sync Impact Report
-- Version change: N/A (template) -> 1.0.0
+- Version change: 1.0.0 -> 1.1.0
 - Modified principles:
-  - Principle 1 -> I. Turborepo Monorepo Boundaries
-  - Principle 2 -> II. Spec-First Requirement Discipline
-  - Principle 3 -> III. Zod Validation Canon
-  - Principle 4 -> IV. LangGraph + Supabase AI Workflow Standard
-  - Principle 5 -> V. Integration Isolation Contract
+  - None renamed; added VI. Design System Enforcement (Figma MCP)
 - Added sections:
-  - Architecture Standards
-  - Delivery Workflow & Quality Gates
+  - Core principle VI (Design System Enforcement)
 - Removed sections:
   - None
 - Templates requiring updates:
   - ✅ updated: .specify/templates/plan-template.md
   - ✅ updated: .specify/templates/spec-template.md
   - ✅ updated: .specify/templates/tasks-template.md
-  - ⚠ pending: .specify/templates/commands/*.md (directory not present in this repo)
+  - N/A: .specify/templates/commands/*.md (directory not present in this repo)
 - Deferred TODOs:
   - None
+- Note: Principle VI names Figma MCP reads as implemented by `plugin-figma-figma`
+  (`get_variable_defs`, `get_metadata`, `get_design_context`), covering the intents
+  behind generic “design tokens” and “file nodes” resolution.
 -->
 
 # VibePipeline Constitution
@@ -66,6 +64,19 @@ access MUST go through typed integration interfaces exposed by this package.
 Rationale: Centralized integration adapters contain third-party volatility and simplify testing,
 security controls, and future provider changes.
 
+### VI. Design System Enforcement (Figma MCP)
+Before drafting a UI Kit or authoring UI specifications grounded in a linked Figma file,
+agents MUST validate against the **Figma MCP** for that file. If intake includes a Figma URL,
+specifications MUST NOT use `TBD` (or equivalent placeholders) for color, typography, or spacing
+values that the file can supply through MCP; those values MUST be resolved from Figma via MCP
+reads before the spec is treated as complete. For the official Figma MCP enabled in this project,
+agents MUST use `get_variable_defs` to resolve variables (including color, typography, and spacing)
+and `get_metadata` or `get_design_context` as needed for file and node context—covering the same
+intents as generic “get design tokens” and “get file nodes” workflows.
+
+Rationale: MCP-grounded specs prevent invented tokens and keep UI kits aligned with the design
+system of record when a Figma URL exists.
+
 ## Architecture Standards
 
 - `apps/web` MUST remain a Next.js application organized with FSD conventions.
@@ -81,7 +92,8 @@ security controls, and future provider changes.
 1. **Spec Gate (Blocking)**: `project-spec/` numbered requirement files are present and reviewed
    before planning or coding.
 2. **Plan Gate**: implementation plans include constitutional checks for monorepo boundaries,
-   Zod contracts, LangGraph + Supabase workflow persistence, and integration isolation.
+   Zod contracts, LangGraph + Supabase workflow persistence, integration isolation, and—when a
+   Figma URL is in scope—Figma MCP validation before UI Kit / UI token specs are finalized.
 3. **Implementation Gate**: tasks and PRs reference originating requirement documents and verify
    all new runtime data paths are Zod-validated.
 4. **Integration Gate**: Figma/Linear API usage is only from `packages/integrations`.
@@ -103,4 +115,4 @@ Compliance policy:
   constitutional alignment.
 - Every PR review MUST include a constitution compliance check.
 
-**Version**: 1.0.0 | **Ratified**: 2026-03-31 | **Last Amended**: 2026-03-31
+**Version**: 1.1.0 | **Ratified**: 2026-03-31 | **Last Amended**: 2026-04-02

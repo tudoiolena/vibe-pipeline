@@ -12,14 +12,19 @@ export {
 } from "./env";
 export {
   createFigmaClient,
+  extractFigmaFileKeyFromUrl,
+  figmaRgbToHex,
   getFigmaFileMetadata,
   mapFigmaFileToDesignMap,
+  resolveFigmaUiKitTargetPage,
+  verifyFigmaDesignAccessible,
   type FigmaClient,
   type FigmaFileComponent,
   type FigmaFileMetadata,
   type FigmaFileNode,
   type FigmaFileResponse,
-  type FigmaFileStyle
+  type FigmaFileStyle,
+  type FigmaUiKitTargetPage
 } from "./adapters/figma";
 export {
   exportTasksToLinear,

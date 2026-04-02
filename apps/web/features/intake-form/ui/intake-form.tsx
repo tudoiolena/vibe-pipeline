@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { useBumpSessionHistory } from "@/features/session-history";
-import { extractFigmaFileKeyFromFigmaUrl } from "@/lib/figma-utils";
+import { extractFigmaFileKeyFromUrl } from "@vibe/integrations";
 import { cn } from "@/lib/utils";
 import { IntakeRequestSchema, IntakeResponseSchema } from "../model/intake.schema";
 
@@ -33,7 +33,7 @@ function resolveFigmaKeyFromInput(figmaInput: string): string | null {
   if (trimmed.length === 0) {
     return null;
   }
-  const fromUrl = extractFigmaFileKeyFromFigmaUrl(trimmed);
+  const fromUrl = extractFigmaFileKeyFromUrl(trimmed);
   const asRawKey = /^[A-Za-z0-9]+$/.test(trimmed) ? trimmed : null;
   return fromUrl ?? asRawKey;
 }

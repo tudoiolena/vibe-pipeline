@@ -1,6 +1,25 @@
 import { z } from "zod";
 import { GapItemSchema } from "@/features/gap-viewer/model/gap-session-state.schema";
 
+export const ClarificationTimelineEventSchema = z.discriminatedUnion("kind", [
+  z.object({
+    at: z.string(),
+    kind: z.literal("figma_verified"),
+    fileKey: z.string().optional()
+  }),
+  z.object({
+    at: z.string(),
+    kind: z.literal("figma_failed"),
+    error: z.string().optional()
+  }),
+  z.object({
+    at: z.string(),
+    kind: z.literal("clarifications_merged_into_brief")
+  })
+]);
+
+export type ClarificationTimelineEvent = z.infer<typeof ClarificationTimelineEventSchema>;
+
 export const SessionHistoryItemTypeSchema = z.enum([
   "USER_INPUT",
   "ANALYSIS_RESULT",
@@ -20,15 +39,16 @@ export const SessionHistoryEntrySchema = z.object({
   gapCount: z.number(),
   gapCountBefore: z.number().nullable(),
   hasGapAnalysis: z.boolean(),
-  gaps: z.array(GapItemSchema)
+  gaps: z.array(GapItemSchema),
+  /** From pipeline `stateJson` when gap analysis ran (Figma validation). */
+  figmaLinkVerified: z.boolean().nullish().default(null)
 });
 
-export const SessionHistoryResponseSchema = z.array(SessionHistoryEntrySchema);
-
-/** Wrapped API shape: timeline entries plus ordered clarifications from session state. */
+/** API shape: timeline entries plus ordered clarifications from session state. */
 export const SessionHistoryPayloadSchema = z.object({
   entries: z.array(SessionHistoryEntrySchema),
-  clarificationRounds: z.array(z.string())
+  clarificationRounds: z.array(z.string()),
+  clarificationTimeline: z.array(ClarificationTimelineEventSchema).default([])
 });
 
 export type SessionHistoryEntry = z.infer<typeof SessionHistoryEntrySchema>;

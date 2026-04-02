@@ -48,6 +48,30 @@ function parsePrdFromSessionState(stateJson: unknown): PRD | null {
   return parsed.success ? parsed.data : null;
 }
 
+function parseWorkflowStatusFromSessionState(stateJson: unknown): string | null {
+  const envelope = parseEnvelope(stateJson);
+  const raw = envelope?.pipelineState.stateJson;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const ws = (raw as Record<string, unknown>).workflowStatus;
+  return typeof ws === "string" && ws.trim().length > 0 ? ws.trim() : null;
+}
+
+/** True once the PRD node has finished (workflow advanced past design / generation of the PRD artifact). */
+function isPrdNodeComplete(workflowStatus: string | null): boolean {
+  if (workflowStatus == null) {
+    return true;
+  }
+  return (
+    workflowStatus === "prd_generated" ||
+    workflowStatus === "tasks_generated" ||
+    workflowStatus === "design_analyzed" ||
+    workflowStatus === "handoff_prepared" ||
+    workflowStatus === "completed"
+  );
+}
+
 type CursorRuleFile = {
   filename: string;
   content: string;
@@ -182,6 +206,7 @@ function renderSessionStageContent(options: {
   project: { description: string | null };
   stateJson: unknown;
   prdForRead: PRD | null;
+  prdNodeComplete: boolean;
   taskTreeForExport: TaskTree | null;
   designMapForRead: ReturnType<typeof resolveDesignMapFromSession>;
   cursorRulesForRead: CursorRuleFile[];
@@ -208,6 +233,7 @@ function renderSessionStageContent(options: {
     return options.prdForRead ? (
       <PrdReadMode
         prd={options.prdForRead}
+        prdNodeComplete={options.prdNodeComplete}
         sessionId={options.sessionId}
         projectId={options.projectId}
         taskTree={options.taskTreeForExport}
@@ -247,18 +273,22 @@ export default async function ProjectSessionPage({ params }: ProjectPageProps) {
     stage === "prd" || stage === "tasks" || stage === "design_sync" || stage === "handoff" || stage === "export";
 
   let prdForRead: PRD | null = null;
+  let prdLoadedFromArtifact = false;
+  const workflowStatus = session && !sessionError ? parseWorkflowStatusFromSessionState(session.state_json) : null;
   if (session && !sessionError && isReadModeStage(session.current_stage)) {
     const { data: prdArtifact } = await getLatestArtifactVersion(client, projectId, "prd");
     if (prdArtifact?.content_json) {
       const parsed = PRDSchema.safeParse(prdArtifact.content_json);
       if (parsed.success) {
         prdForRead = parsed.data;
+        prdLoadedFromArtifact = true;
       }
     }
     if (!prdForRead) {
       prdForRead = parsePrdFromSessionState(session.state_json);
     }
   }
+  const prdNodeComplete = isPrdNodeComplete(workflowStatus) || prdLoadedFromArtifact;
 
   let taskTreeForExport: TaskTree | null = null;
   let designMapForRead: ReturnType<typeof resolveDesignMapFromSession> = undefined;
@@ -328,6 +358,7 @@ export default async function ProjectSessionPage({ params }: ProjectPageProps) {
             project,
             stateJson: session.state_json,
             prdForRead,
+            prdNodeComplete,
             taskTreeForExport,
             designMapForRead,
             cursorRulesForRead,
