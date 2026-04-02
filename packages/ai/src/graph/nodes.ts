@@ -971,13 +971,25 @@ export function createPrdDesignerNode(client: DatabaseClient): PipelineNode {
   });
 }
 
+function formatInternalSpecId(n: number): string {
+  return `VP-${String(n).padStart(4, "0")}`;
+}
+
 function buildFallbackTaskTree(prd: z.infer<typeof PRDSchema>): z.infer<typeof TaskTreeSchema> {
+  let vpSeq = 0;
+  const nextVp = (): string => {
+    vpSeq += 1;
+    return formatInternalSpecId(vpSeq);
+  };
+
   if (prd.userStories.length === 0 && prd.functionalRequirements.length === 0) {
+    const epicVp = nextVp();
+    const taskVp = nextVp();
     return TaskTreeSchema.parse({
       epics: [
         {
           externalKey: "EPIC-1",
-          title: "Initial delivery planning",
+          title: `[${epicVp}] Initial delivery planning`,
           description: "Define implementation tasks from the approved PRD scope.",
           hierarchyLevel: 0,
           taskType: "epic",
@@ -986,11 +998,12 @@ function buildFallbackTaskTree(prd: z.infer<typeof PRDSchema>): z.infer<typeof T
           estimatePoints: null,
           acceptanceCriteria: ["Project backlog created and reviewed with stakeholders."],
           dependencies: [],
-          metadata: { source: "fallback_task_generator" },
+          specReferences: ["02-prd.md", "08-implementation-plan.md"],
+          metadata: { source: "fallback_task_generator", internalSpecId: epicVp },
           children: [
             {
               externalKey: "TASK-1",
-              title: "Create initial implementation backlog",
+              title: `[${taskVp}] Create initial implementation backlog`,
               description: "Break down approved scope into delivery tasks.",
               hierarchyLevel: 1,
               taskType: "task",
@@ -999,7 +1012,8 @@ function buildFallbackTaskTree(prd: z.infer<typeof PRDSchema>): z.infer<typeof T
               estimatePoints: 3,
               acceptanceCriteria: ["At least one concrete implementation task is defined."],
               dependencies: [],
-              metadata: { source: "fallback_task_generator" },
+              specReferences: ["02-prd.md", "05-acceptance-criteria.md", "08-implementation-plan.md"],
+              metadata: { source: "fallback_task_generator", internalSpecId: taskVp },
               children: []
             }
           ]
@@ -1024,9 +1038,19 @@ function buildFallbackTaskTree(prd: z.infer<typeof PRDSchema>): z.infer<typeof T
     const epicKey = `EPIC-${index + 1}`;
     const taskKey = `TASK-${index + 1}`;
     const subtaskKey = `SUB-${index + 1}`;
+    const epicVp = nextVp();
+    const taskVp = nextVp();
+    const subVp = nextVp();
+    const epicSpecRefs = ["02-prd.md", "04-user-stories.md", "08-implementation-plan.md"];
+    const taskSpecRefs = fr
+      ? ["04-user-stories.md", "05-acceptance-criteria.md", "08-implementation-plan.md"]
+      : ["04-user-stories.md", "08-implementation-plan.md"];
+    const subSpecRefs = taskSpecRefs;
+    const epicTitleBase = story.id ? `${story.id} delivery` : `Epic ${index + 1}`;
+    const taskTitleBase = fr?.title ?? `Implement ${story.iWant}`;
     return {
       externalKey: epicKey,
-      title: story.id ? `${story.id} delivery` : `Epic ${index + 1}`,
+      title: `[${epicVp}] ${epicTitleBase}`,
       description: story.iWant,
       hierarchyLevel: 0 as const,
       taskType: "epic" as const,
@@ -1035,11 +1059,12 @@ function buildFallbackTaskTree(prd: z.infer<typeof PRDSchema>): z.infer<typeof T
       estimatePoints: null,
       acceptanceCriteria: story.acceptanceHints,
       dependencies: [],
-      metadata: { source: "fallback_task_generator" },
+      specReferences: epicSpecRefs,
+      metadata: { source: "fallback_task_generator", internalSpecId: epicVp, sourceStory: story.id },
       children: [
         {
           externalKey: taskKey,
-          title: fr?.title ?? `Implement ${story.iWant}`,
+          title: `[${taskVp}] ${taskTitleBase}`,
           description: fr?.details.join("\n") ?? story.soThat,
           hierarchyLevel: 1 as const,
           taskType: "task" as const,
@@ -1048,11 +1073,16 @@ function buildFallbackTaskTree(prd: z.infer<typeof PRDSchema>): z.infer<typeof T
           estimatePoints: 3,
           acceptanceCriteria: story.acceptanceHints,
           dependencies: [],
-          metadata: { sourceStory: story.id },
+          specReferences: taskSpecRefs,
+          metadata: {
+            sourceStory: story.id,
+            internalSpecId: taskVp,
+            ...(fr?.id ? { functionalRequirementIds: [fr.id] } : {})
+          },
           children: [
             {
               externalKey: subtaskKey,
-              title: "Validation and QA",
+              title: `[${subVp}] Validation and QA`,
               description: `Validate acceptance for ${story.id}`,
               hierarchyLevel: 2 as const,
               taskType: "subtask" as const,
@@ -1061,7 +1091,8 @@ function buildFallbackTaskTree(prd: z.infer<typeof PRDSchema>): z.infer<typeof T
               estimatePoints: 1,
               acceptanceCriteria: story.acceptanceHints.length > 0 ? story.acceptanceHints : ["Acceptance validated"],
               dependencies: [],
-              metadata: {},
+              specReferences: subSpecRefs,
+              metadata: { internalSpecId: subVp },
               children: []
             }
           ]
@@ -1131,8 +1162,20 @@ export function createTaskGeneratorNode(client: DatabaseClient): PipelineNode {
           '- Every task node must include a UUID in metadata.uuid (v4 format) so tasks are ready for Linear export.',
           "- Include acceptanceCriteria and dependencies where relevant.",
           "",
+          "Internal spec IDs and titles:",
+          '- Assign every node a unique internalSpecId in metadata using the pattern VP- plus exactly four digits (e.g. VP-0001, VP-0002). Numbers must be unique across the whole tree.',
+          "- Prepend the bracketed id to every title, e.g. title: \"[VP-0003] Implement password reset flow\" (same id as metadata.internalSpecId).",
+          "",
+          "Spec-kit references (field specReferences on each node):",
+          "- For each node, set specReferences to an array of relevant spec-kit Markdown filenames, chosen only from this closed list:",
+          "  01-clarifications.md, 02-prd.md, 03-scope.md, 04-user-stories.md, 05-acceptance-criteria.md,",
+          "  06-ui-kit.md, 07-design-map.md, 08-implementation-plan.md, 09-test-plan.md",
+          "- Include a file only when that spec document would genuinely help implement or verify that node; omit files that do not apply.",
+          "",
+          "Traceability metadata:",
+          "- Store source user story ids and functional requirement ids in metadata when applicable (e.g. metadata.functionalRequirementIds as string[]).",
+          "",
           "Return a complete TaskTree with at least one epic.",
-          "Maintain traceability in metadata (e.g. source user story ids and functional requirement ids).",
           "",
           "PRD userStories JSON:",
           JSON.stringify(prd.userStories, null, 2),

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
+import { buildLinearIssueMarkdown, type DesignMap, type TaskNode } from "@vibe/schema";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,9 +21,39 @@ type ExportLinearDialogProps = {
   sessionId?: string;
   projectId?: string;
   selectedTaskIds: string[];
+  selectedTasks: TaskNode[];
+  designMap?: DesignMap;
   linearTeamDisplay: string;
   defaultLinearTeamId?: string;
 };
+
+function figmaNodeUrl(fileKey: string, nodeId: string): string {
+  return `https://www.figma.com/design/${fileKey}?node-id=${encodeURIComponent(nodeId)}`;
+}
+
+function resolveTaskFigmaUrl(task: TaskNode, designMap?: DesignMap): string | null {
+  const meta = task.metadata;
+  if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+    const explicit = (meta as { figmaUrl?: unknown }).figmaUrl;
+    if (typeof explicit === "string" && /^https?:\/\//.test(explicit)) {
+      return explicit;
+    }
+    const nodeId = (meta as { figmaNodeId?: unknown }).figmaNodeId;
+    const fileKey = (meta as { figmaFileKey?: unknown }).figmaFileKey;
+    if (typeof nodeId === "string" && nodeId.trim() && typeof fileKey === "string" && fileKey.trim()) {
+      return figmaNodeUrl(fileKey.trim(), nodeId.trim());
+    }
+  }
+  if (!designMap?.links?.length) {
+    return null;
+  }
+  const link = designMap.links.find((candidate) => candidate.taskExternalKey === task.externalKey);
+  if (!link) {
+    return null;
+  }
+  const node = designMap.nodes.find((candidate) => candidate.nodeId === link.nodeId);
+  return node?.figmaUrl ?? null;
+}
 
 export function ExportLinearDialog({
   open,
@@ -30,6 +61,8 @@ export function ExportLinearDialog({
   sessionId,
   projectId,
   selectedTaskIds,
+  selectedTasks,
+  designMap,
   linearTeamDisplay,
   defaultLinearTeamId
 }: ExportLinearDialogProps) {
@@ -37,9 +70,23 @@ export function ExportLinearDialog({
   const [teamIdOverride, setTeamIdOverride] = useState(defaultLinearTeamId?.trim() ?? "");
   const [exportLoading, setExportLoading] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
 
   const selectedCount = selectedTaskIds.length;
   const selectedPreview = useMemo(() => selectedTaskIds.slice(0, 8), [selectedTaskIds]);
+  const markdownPreview = useMemo(
+    () =>
+      selectedTasks
+        .map((task) => {
+          const body =
+            buildLinearIssueMarkdown(task, {
+              figmaUrl: resolveTaskFigmaUrl(task, designMap)
+            }) ?? "_No description body_";
+          return [`### ${task.externalKey} — ${task.title}`, "", body].join("\n");
+        })
+        .join("\n\n---\n\n"),
+    [designMap, selectedTasks]
+  );
 
   const onDialogChange = useCallback(
     (nextOpen: boolean) => {
@@ -47,6 +94,7 @@ export function ExportLinearDialog({
       setExportError(null);
       if (nextOpen) {
         setTeamIdOverride(defaultLinearTeamId?.trim() ?? "");
+        setShowPreview(false);
       }
     },
     [defaultLinearTeamId, onOpenChange]
@@ -128,6 +176,10 @@ export function ExportLinearDialog({
           <p className="text-xs text-muted-foreground">
             Task selection comes from the checkboxes in the Task Backlog tab.
           </p>
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input type="checkbox" checked={showPreview} onChange={(e) => setShowPreview(e.target.checked)} />
+            Preview final Markdown body
+          </label>
           <div className="max-h-[min(30vh,220px)] space-y-1 overflow-y-auto rounded-md border border-border p-3 text-sm">
             {selectedPreview.map((taskId) => (
               <p key={taskId} className="font-mono text-xs text-foreground/90">
@@ -140,6 +192,11 @@ export function ExportLinearDialog({
               </p>
             ) : null}
           </div>
+          {showPreview ? (
+            <div className="max-h-[min(40vh,320px)] overflow-auto rounded-md border border-border bg-muted/20 p-3">
+              <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground">{markdownPreview}</pre>
+            </div>
+          ) : null}
         </div>
         {exportError ? (
           <p className="rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">

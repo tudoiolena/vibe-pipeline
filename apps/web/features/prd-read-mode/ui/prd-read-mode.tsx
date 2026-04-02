@@ -3,8 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DesignMap, PRD, TaskTree, UIKit } from "@vibe/schema";
-import { serializePrdToMarkdown } from "@vibe/schema";
-import { Loader2, PenTool } from "lucide-react";
+import { getInternalSpecIdFromTask, serializePrdToMarkdown } from "@vibe/schema";
+import { Check, ChevronDown, ExternalLink, Loader2, PenTool } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +19,52 @@ type CursorRuleFile = {
 };
 
 type ReadModeTab = "prd" | "spec" | "tasks" | "rules";
+type TaskCheckboxRow = ReturnType<typeof buildTaskRow>;
+
+function buildTaskRow(task: ReturnType<typeof flattenTaskTree>[number]) {
+  const internalSpecId = getInternalSpecIdFromTask(task);
+  const titleShowsVpPrefix = /^\[VP-\d+]/.test(task.title.trim());
+  return {
+    ...task,
+    internalSpecId,
+    titleForDisplay: task.title,
+    vpChip: internalSpecId && !titleShowsVpPrefix ? internalSpecId : null,
+    indentClass: task.hierarchyLevel === 0 ? "" : task.hierarchyLevel === 1 ? "ml-4" : "ml-8",
+    typeLabel: task.taskType === "epic" ? "Epic" : task.taskType === "task" ? "Task" : "Subtask"
+  };
+}
+
+function resolveTaskFigmaUrl(task: TaskCheckboxRow, designMap?: DesignMap): string | null {
+  const meta = task.metadata;
+  if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+    const explicitUrl = (meta as { figmaUrl?: unknown }).figmaUrl;
+    if (typeof explicitUrl === "string" && /^https?:\/\//.test(explicitUrl)) {
+      return explicitUrl;
+    }
+    const nodeId = (meta as { figmaNodeId?: unknown }).figmaNodeId;
+    const fileKey = (meta as { figmaFileKey?: unknown }).figmaFileKey;
+    if (typeof nodeId === "string" && nodeId.trim().length > 0 && typeof fileKey === "string" && fileKey.trim().length > 0) {
+      return `https://www.figma.com/design/${fileKey}?node-id=${encodeURIComponent(nodeId)}`;
+    }
+  }
+  if (!designMap?.links?.length) {
+    return null;
+  }
+  const link = designMap.links.find((candidate) => candidate.taskExternalKey === task.externalKey);
+  if (!link) {
+    return null;
+  }
+  const node = designMap.nodes.find((candidate) => candidate.nodeId === link.nodeId);
+  return node?.figmaUrl ?? null;
+}
+
+function Markdown({ content }: { content: string }) {
+  return (
+    <div className="prose prose-sm max-w-none whitespace-pre-wrap text-foreground/90 dark:prose-invert">
+      {content}
+    </div>
+  );
+}
 
 const STAGE_LABELS: Record<string, string> = {
   intake: "Intake",
@@ -63,6 +109,7 @@ export function PrdReadMode({
   const [exportOpen, setExportOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<ReadModeTab>("prd");
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
+  const [expandedTaskKeys, setExpandedTaskKeys] = useState<Set<string>>(() => new Set());
 
   const flatTasks = useMemo(() => (taskTree ? flattenTaskTree(taskTree) : []), [taskTree]);
   const figmaMappedTaskKeys = useMemo(
@@ -88,6 +135,10 @@ export function PrdReadMode({
     () => flatTasks.map((task) => task.externalKey).filter((key) => selectedKeys.has(key)),
     [flatTasks, selectedKeys]
   );
+  const selectedTasksForExport = useMemo(
+    () => flatTasks.filter((task) => selectedKeys.has(task.externalKey)),
+    [flatTasks, selectedKeys]
+  );
 
   const markdown = serializePrdToMarkdown(prd);
   const resolvedSpecFiles = useMemo(
@@ -96,12 +147,7 @@ export function PrdReadMode({
   );
 
   const taskCheckboxRows = useMemo(
-    () =>
-      flatTasks.map((task) => ({
-        ...task,
-        indentClass: task.hierarchyLevel === 0 ? "" : task.hierarchyLevel === 1 ? "ml-4" : "ml-8",
-        typeLabel: task.taskType === "epic" ? "Epic" : task.taskType === "task" ? "Task" : "Subtask"
-      })),
+    () => flatTasks.map((task) => buildTaskRow(task)),
     [flatTasks]
   );
   const [selectedSpecFilename, setSelectedSpecFilename] = useState("");
@@ -164,6 +210,17 @@ export function PrdReadMode({
 
   const toggleTask = useCallback((externalKey: string) => {
     setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(externalKey)) {
+        next.delete(externalKey);
+      } else {
+        next.add(externalKey);
+      }
+      return next;
+    });
+  }, []);
+  const toggleExpandedTask = useCallback((externalKey: string) => {
+    setExpandedTaskKeys((prev) => {
       const next = new Set(prev);
       if (next.has(externalKey)) {
         next.delete(externalKey);
@@ -428,6 +485,7 @@ export function PrdReadMode({
 
           {activeTab === "tasks" ? (
             <div className="space-y-4">
+            <div className="sticky top-0 z-20 -mx-2 rounded-md border border-border bg-background/95 px-2 py-2 shadow-sm backdrop-blur supports-backdrop-filter:bg-background/80">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm text-muted-foreground">
                 {selectedTaskIds.length} of {flatTasks.length} tasks selected
@@ -455,38 +513,129 @@ export function PrdReadMode({
                 </Button>
               </div>
             </div>
+            </div>
 
             <div className="space-y-2 rounded-md border border-border p-3">
               {flatTasks.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No tasks available yet.</p>
               ) : (
                 taskCheckboxRows.map((task) => (
-                  <label
+                  <div
                     key={task.externalKey}
                     className={[
-                      "flex cursor-pointer items-start gap-2 rounded-sm py-1 text-sm hover:bg-muted/50",
+                      "overflow-hidden rounded-md border border-border bg-card text-sm",
                       task.indentClass
                     ].join(" ")}
                   >
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={selectedKeys.has(task.externalKey)}
-                      onChange={() => toggleTask(task.externalKey)}
-                    />
-                    <span className="min-w-0">
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {task.externalKey} · {task.typeLabel}
-                      </span>
-                      <span className="block text-foreground">{task.title}</span>
-                    </span>
-                    {figmaMappedTaskKeys.has(task.externalKey) ? (
-                      <Badge variant="secondary" className="ml-auto inline-flex items-center gap-1">
-                        <PenTool className="h-3 w-3" />
-                        Figma
-                      </Badge>
+                    <div className="flex items-start gap-2 p-3">
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={selectedKeys.has(task.externalKey)}
+                        onChange={() => toggleTask(task.externalKey)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => toggleExpandedTask(task.externalKey)}
+                        className="flex min-w-0 flex-1 cursor-pointer items-start justify-between gap-3 text-left"
+                        aria-expanded={expandedTaskKeys.has(task.externalKey)}
+                      >
+                        <span className="min-w-0">
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {task.externalKey} · {task.typeLabel}
+                          </span>
+                          <span className="mt-1 flex flex-wrap items-center gap-2 text-foreground">
+                            {task.vpChip ? (
+                              <Badge variant="outline" className="font-mono text-[10px] tracking-wide">
+                                {task.vpChip}
+                              </Badge>
+                            ) : null}
+                            <span>{task.titleForDisplay}</span>
+                          </span>
+                        </span>
+                        <ChevronDown
+                          className={[
+                            "mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                            expandedTaskKeys.has(task.externalKey) ? "rotate-180" : ""
+                          ].join(" ")}
+                        />
+                      </button>
+                      {(resolveTaskFigmaUrl(task, designMap) || figmaMappedTaskKeys.has(task.externalKey)) &&
+                      (() => {
+                        const figmaUrl = resolveTaskFigmaUrl(task, designMap);
+                        if (!figmaUrl) {
+                          return (
+                            <Badge variant="secondary" className="inline-flex items-center gap-1">
+                              <PenTool className="h-3 w-3" />
+                              Figma
+                            </Badge>
+                          );
+                        }
+                        return (
+                          <a
+                            href={figmaUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                            title="Open Figma design"
+                          >
+                            <PenTool className="h-3 w-3" />
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        );
+                      })()}
+                    </div>
+                    {expandedTaskKeys.has(task.externalKey) ? (
+                      <div className="space-y-3 border-t border-border bg-muted/20 px-3 py-3">
+                        <div className="space-y-1">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            Handoff Preview
+                          </p>
+                          {task.description?.trim() ? (
+                            <Markdown content={task.description.trim()} />
+                          ) : (
+                            <div className="rounded-md border border-border bg-background p-3">
+                              <div className="space-y-2">
+                                <div className="h-3 w-44 animate-pulse rounded bg-muted" />
+                                <div className="h-3 w-full animate-pulse rounded bg-muted" />
+                                <div className="h-3 w-5/6 animate-pulse rounded bg-muted" />
+                              </div>
+                              <p className="mt-3 text-xs text-muted-foreground">Generating implementation details...</p>
+                            </div>
+                          )}
+                        </div>
+                        {task.acceptanceCriteria.length > 0 ? (
+                          <div className="space-y-1">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              Acceptance Criteria
+                            </p>
+                            <ul className="space-y-1">
+                              {task.acceptanceCriteria.map((criterion) => (
+                                <li key={criterion} className="flex items-start gap-2 text-sm text-foreground/90">
+                                  <Check className="mt-0.5 h-3.5 w-3.5 text-primary" />
+                                  <span>{criterion}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                        {task.specReferences.length > 0 ? (
+                          <div className="space-y-1 pt-1">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              Spec Context
+                            </p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {task.specReferences.map((reference) => (
+                                <Badge key={reference} variant="secondary" className="text-[10px]">
+                                  {reference}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
                     ) : null}
-                  </label>
+                  </div>
                 ))
               )}
             </div>
@@ -530,6 +679,8 @@ export function PrdReadMode({
           sessionId={sessionId}
           projectId={projectId}
           selectedTaskIds={selectedTaskIds}
+          selectedTasks={selectedTasksForExport}
+          designMap={designMap}
           linearTeamDisplay={linearTeamDisplay}
           defaultLinearTeamId={defaultLinearTeamId}
         />

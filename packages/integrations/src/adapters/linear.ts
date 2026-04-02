@@ -1,5 +1,9 @@
 import { LinearClient } from "@linear/sdk";
-import type { DesignMap, TaskNode } from "@vibe/schema";
+import {
+  buildLinearIssueMarkdown,
+  type DesignMap,
+  type TaskNode
+} from "@vibe/schema";
 import { requireLinearApiKey } from "../env";
 
 export type LinearExportedIssue = {
@@ -8,12 +12,33 @@ export type LinearExportedIssue = {
   url: string | null;
 };
 
-function resolveFigmaDesignUrl(externalKey: string, designMap: DesignMap | undefined): string | null {
+export type ExportTasksToLinearOptions = {
+  designMap?: DesignMap;
+};
+
+function figmaNodeUrl(fileKey: string, nodeId: string): string {
+  return `https://www.figma.com/design/${fileKey}?node-id=${encodeURIComponent(nodeId)}`;
+}
+
+function resolveFigmaDesignUrl(task: TaskNode, designMap: DesignMap | undefined): string | null {
+  const meta = task.metadata;
+  if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+    const explicit = (meta as { figmaUrl?: unknown }).figmaUrl;
+    if (typeof explicit === "string" && /^https?:\/\//.test(explicit)) {
+      return explicit;
+    }
+    const nodeId = (meta as { figmaNodeId?: unknown }).figmaNodeId;
+    const fileKey = (meta as { figmaFileKey?: unknown }).figmaFileKey;
+    if (typeof nodeId === "string" && nodeId.trim() && typeof fileKey === "string" && fileKey.trim()) {
+      return figmaNodeUrl(fileKey.trim(), nodeId.trim());
+    }
+  }
+
   if (!designMap?.links.length) {
     return null;
   }
   for (const link of designMap.links) {
-    if (link.taskExternalKey !== externalKey) {
+    if (link.taskExternalKey !== task.externalKey) {
       continue;
     }
     const node = designMap.nodes.find((n) => n.nodeId === link.nodeId);
@@ -24,31 +49,16 @@ function resolveFigmaDesignUrl(externalKey: string, designMap: DesignMap | undef
   return null;
 }
 
-function buildIssueDescription(task: TaskNode, designMap: DesignMap | undefined): string | undefined {
-  const parts: string[] = [];
-  if (task.description?.trim()) {
-    parts.push(task.description.trim());
-  }
-  const figmaUrl = resolveFigmaDesignUrl(task.externalKey, designMap);
-  if (figmaUrl) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
-    parts.push("## Design Reference", `[Figma](${figmaUrl})`);
-  }
-  const body = parts.join("\n").trim();
-  return body.length > 0 ? body : undefined;
-}
-
 /**
- * Creates one Linear issue per task in order. Appends a Design Reference link when
- * {@link DesignMap} links resolve to a node with a Figma URL for that task's {@link TaskNode.externalKey}.
+ * Creates one Linear issue per task in order using the canonical markdown body:
+ * Reference, Implementation Details, Acceptance Criteria, and Spec References.
  */
 export async function exportTasksToLinear(
   tasks: TaskNode[],
   teamId: string,
-  designMap?: DesignMap
+  options?: ExportTasksToLinearOptions
 ): Promise<{ issues: LinearExportedIssue[] }> {
+  const designMap = options?.designMap;
   const client = new LinearClient({ apiKey: requireLinearApiKey() });
   const issues: LinearExportedIssue[] = [];
 
@@ -56,7 +66,9 @@ export async function exportTasksToLinear(
     const payload = await client.createIssue({
       teamId,
       title: task.title,
-      description: buildIssueDescription(task, designMap)
+      description: buildLinearIssueMarkdown(task, {
+        figmaUrl: resolveFigmaDesignUrl(task, designMap)
+      })
     });
 
     if (!payload.success) {

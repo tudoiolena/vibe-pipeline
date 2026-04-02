@@ -131,6 +131,9 @@ function serializeTaskNode(task: TaskNode, level: number): string {
   } else {
     lines.push("- **Dependencies:** None\n");
   }
+  if (task.specReferences.length > 0) {
+    lines.push(`- **Spec-kit references:** ${task.specReferences.join(", ")}\n`);
+  }
   if (task.acceptanceCriteria.length > 0) {
     lines.push("- **Acceptance criteria:**\n");
     for (const ac of task.acceptanceCriteria) {

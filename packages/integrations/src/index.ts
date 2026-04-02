@@ -21,4 +21,8 @@ export {
   type FigmaFileResponse,
   type FigmaFileStyle
 } from "./adapters/figma";
-export { exportTasksToLinear, type LinearExportedIssue } from "./adapters/linear";
+export {
+  exportTasksToLinear,
+  type ExportTasksToLinearOptions,
+  type LinearExportedIssue
+} from "./adapters/linear";

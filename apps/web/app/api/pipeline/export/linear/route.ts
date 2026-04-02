@@ -62,11 +62,19 @@ export async function POST(request: Request) {
   if (filtered.length === 0) {
     return NextResponse.json({ error: "No tasks matched the selected IDs." }, { status: 400 });
   }
+  const tasksForExport = filtered.map((task) => ({
+    ...task,
+    description: task.description ?? null,
+    acceptanceCriteria: [...task.acceptanceCriteria],
+    specReferences: [...task.specReferences],
+    dependencies: [...task.dependencies],
+    children: [...task.children]
+  }));
 
   const designMap = resolveDesignMapFromSession(session.state_json);
 
   try {
-    const { issues } = await exportTasksToLinear(filtered, teamId, designMap);
+    const { issues } = await exportTasksToLinear(tasksForExport, teamId, { designMap });
     const prevMeta =
       session.metadata && typeof session.metadata === "object" && !Array.isArray(session.metadata)
         ? { ...(session.metadata as Record<string, unknown>) }

@@ -21,9 +21,15 @@ export {
   TaskTypeSchema,
   UserStorySchema
 } from "./schemas";
-export type { TaskNode } from "./schemas";
+export type { FunctionalRequirement, TaskNode } from "./schemas";
 export { prdDocumentToMarkdown } from "./prd-to-markdown";
 export { serializePrdToMarkdown, serializeTasksToMarkdown } from "./serializers";
+export {
+  buildLinearIssueMarkdown,
+  formatFunctionalRequirementsAsAcceptanceChecklist,
+  getInternalSpecIdFromTask,
+  stripInternalSpecIdFromTitle
+} from "./task-traceability";
 export { validateWithSchema } from "./validators";
 export type { ValidationFailure, ValidationResult, ValidationSuccess } from "./validators";
 

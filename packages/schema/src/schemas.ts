@@ -57,6 +57,8 @@ export const FunctionalRequirementSchema = z.object({
   details: z.array(z.string().min(1)).default([])
 });
 
+export type FunctionalRequirement = z.infer<typeof FunctionalRequirementSchema>;
+
 export const TechStackItemSchema = z.object({
   name: z.string().min(1),
   color: z.string().min(1),
@@ -98,6 +100,8 @@ const BaseTaskNodeSchema = z.object({
   estimatePoints: z.number().int().nullable().default(null),
   acceptanceCriteria: z.array(z.string().min(1)).default([]),
   dependencies: z.array(z.string().min(1)).default([]),
+  /** Spec-kit markdown files (01–09) that apply to this task, e.g. 04-user-stories.md */
+  specReferences: z.array(z.string().min(1)).default([]),
   metadata: z.record(z.unknown()).default({})
 });
 
