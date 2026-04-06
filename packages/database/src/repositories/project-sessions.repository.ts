@@ -41,6 +41,13 @@ export async function getLatestProjectSessionByProjectId(
     .maybeSingle();
 }
 
+/** For maintenance scripts (e.g. checkpoint → artifact backfill). */
+export async function listProjectSessionsForBackfill(
+  client: DatabaseClient
+): Promise<RepositoryResult<Pick<ProjectSessionRow, "id" | "project_id" | "state_json">[]>> {
+  return client.from("project_sessions").select("id, project_id, state_json");
+}
+
 export async function updateProjectSessionById(
   client: DatabaseClient,
   id: string,

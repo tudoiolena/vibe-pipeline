@@ -1,15 +1,66 @@
 import { z } from "zod";
-import { BriefSchema, PRDSchema, UIKitSchema } from "@vibe/schema";
+import { BriefSchema, PRDSchema, TechStackItemSchema, UIKitSchema } from "@vibe/schema";
 import { getFigmaFileMetadata } from "@vibe/integrations";
 import { type DatabaseClient } from "@vibe/database";
 import { getAnthropicIntelligenceModel } from "../../llm/anthropic";
 import { createPipelineNode, type PipelineNode } from "./types";
-import { readBriefFromState, PrdRecoveryFieldsSchema, resolveFigmaFileKeyForPipeline } from "./intake";
-import { persistPrdArtifact } from "./shared/persistence";
+import { readBriefFromState, PrdRecoveryFieldsSchema } from "./intake";
+import { resolveFigmaFileKeyFromProject } from "./shared/figma-project-key";
+import { persistPrdArtifact, persistUIKitArtifact } from "./shared/persistence";
 import { deriveUIKitFromFigmaMetadata } from "./shared/figma-utils";
 
 function prdMissingCriticalFields(prd: z.infer<typeof PRDSchema>): boolean {
   return prd.productOverview.trim().length === 0 || prd.architectureFlow.length === 0;
+}
+
+/** Structured output often drops optional-looking arrays; spec export needs these lists populated. */
+function prdHandoffListsIncomplete(prd: z.infer<typeof PRDSchema>): boolean {
+  return (
+    prd.techStack.length === 0 ||
+    prd.assumptions.length === 0 ||
+    prd.risks.length === 0 ||
+    prd.scopeSummary.length === 0
+  );
+}
+
+const PrdHandoffAssumptionSchema = z.object({
+  description: z.string().min(1),
+  mitigation: z.string().min(1)
+});
+const PrdHandoffRiskSchema = z.object({
+  description: z.string().min(1),
+  impact: z.string().min(1)
+});
+const PrdHandoffSectionsSchema = z.object({
+  techStack: z.array(TechStackItemSchema).min(1),
+  assumptions: z.array(PrdHandoffAssumptionSchema).min(3),
+  risks: z.array(PrdHandoffRiskSchema).min(3),
+  scopeSummary: z.array(z.string().min(1)).min(1)
+});
+
+async function fillPrdHandoffLists(
+  brief: z.infer<typeof BriefSchema>,
+  draft: z.infer<typeof PRDSchema>
+): Promise<z.infer<typeof PrdHandoffSectionsSchema>> {
+  const fillModel = getAnthropicIntelligenceModel().withStructuredOutput(PrdHandoffSectionsSchema);
+  const raw = await fillModel.invoke(
+    [
+      "You are PrdSectionFill. The PRD draft has empty techStack, assumptions, risks, and/or scopeSummary arrays.",
+      "Output product-specific values grounded ONLY in the brief and the draft PRD (overview, goals, stories, functional requirements).",
+      "",
+      "- techStack: at least 3 items; distinct categories (e.g. frontend, backend, data, payments). Field `color` is a short UI role label (e.g. primary, accent) — not invented hex.",
+      "- assumptions: at least 3 entries with description and mitigation.",
+      "- risks: at least 3 entries with description and impact.",
+      "- scopeSummary: at least 2 MVP scope bullets (in/out or boundaries).",
+      "",
+      "Brief JSON:",
+      JSON.stringify(brief, null, 2),
+      "",
+      "PRD draft JSON:",
+      JSON.stringify(draft, null, 2)
+    ].join("\n")
+  );
+  return PrdHandoffSectionsSchema.parse(raw);
 }
 
 function readFigmaLinkVerified(stateJson: Record<string, unknown>): boolean {
@@ -30,7 +81,7 @@ export function createPrdDesignerNode(client: DatabaseClient): PipelineNode {
   return createPipelineNode("prdDesigner", async (state) => {
     const brief = readBriefFromState(state);
     const stateJson = state.stateJson as Record<string, unknown>;
-    const figmaKey = resolveFigmaFileKeyForPipeline(state, brief);
+    const figmaKey = await resolveFigmaFileKeyFromProject(client, state.projectId);
     const figmaVerified = readFigmaLinkVerified(stateJson);
 
     let figmaUiKitBlock = "";
@@ -137,12 +188,33 @@ export function createPrdDesignerNode(client: DatabaseClient): PipelineNode {
       prd = recovered.data;
     }
 
+    if (prdHandoffListsIncomplete(prd)) {
+      const fill = await fillPrdHandoffLists(brief, prd);
+      const merged = {
+        ...prd,
+        techStack: prd.techStack.length > 0 ? prd.techStack : fill.techStack,
+        assumptions: prd.assumptions.length > 0 ? prd.assumptions : fill.assumptions,
+        risks: prd.risks.length > 0 ? prd.risks : fill.risks,
+        scopeSummary: prd.scopeSummary.length > 0 ? prd.scopeSummary : fill.scopeSummary
+      };
+      const reparsed = PRDSchema.safeParse(merged);
+      if (!reparsed.success) {
+        throw new Error(
+          `PRD designer: handoff section fill merge failed validation: ${JSON.stringify(reparsed.error.flatten())}`
+        );
+      }
+      prd = reparsed.data;
+    }
+
     const persisted = await persistPrdArtifact(
       client,
       state,
       prd,
       persistedUIKit ? { uiKit: persistedUIKit } : undefined
     );
+    if (persistedUIKit) {
+      await persistUIKitArtifact(client, state, persistedUIKit);
+    }
     return {
       currentStage: "prd",
       stateJson: {

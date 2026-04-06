@@ -145,30 +145,73 @@ export function extractFigmaFileKeyFromUrl(url: string): string | null {
 }
 
 /**
+ * Normalizes optional user input into a string suitable for `projects.source_figma_url`
+ * (full figma.com URL or canonical URL built from a raw file key).
+ */
+export function normalizeFigmaSourceUrlForProject(raw: string | null | undefined): string | null {
+  if (raw == null) {
+    return null;
+  }
+  const t = raw.trim();
+  if (t.length === 0) {
+    return null;
+  }
+  if (t.toLowerCase().includes("figma.com")) {
+    return extractFigmaFileKeyFromUrl(t) ? t : null;
+  }
+  if (/^[A-Za-z0-9]+$/.test(t)) {
+    return `https://www.figma.com/design/${t}/file`;
+  }
+  return null;
+}
+
+/**
  * Verifies the file is readable with shallow depth (same discovery surface as MCP `get_metadata` overview).
  * Used by the pipeline before treating Figma as design truth.
  */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 export async function verifyFigmaDesignAccessible(fileKey: string): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const key = fileKey.trim();
-    figmaTrace("verifyFigmaDesignAccessible: start", { fileKey: key || "(empty)" });
-    if (!key) {
-      figmaTrace("verifyFigmaDesignAccessible: failed", { reason: "empty-key" });
-      return { ok: false, error: "Empty Figma file key." };
-    }
-    const client = createFigmaClient();
-    const file = await client.getFile(key, { depth: 1 });
-    figmaTrace("verifyFigmaDesignAccessible: success", {
-      fileName: file.name,
-      canvasCount: countCanvasPages(file.document),
-      topLevelChildTypes: (file.document.children ?? []).slice(0, 12).map((c) => c.type)
-    });
-    return { ok: true };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    figmaTrace("verifyFigmaDesignAccessible: error", { error: message });
-    return { ok: false, error: message };
+  const key = fileKey.trim();
+  figmaTrace("verifyFigmaDesignAccessible: start", { fileKey: key || "(empty)" });
+  if (!key) {
+    figmaTrace("verifyFigmaDesignAccessible: failed", { reason: "empty-key" });
+    return { ok: false, error: "Empty Figma file key." };
   }
+
+  const maxAttempts = 3;
+  let lastMessage: string | undefined;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const client = createFigmaClient();
+      const file = await client.getFile(key, { depth: 1 });
+      figmaTrace("verifyFigmaDesignAccessible: success", {
+        fileName: file.name,
+        canvasCount: countCanvasPages(file.document),
+        topLevelChildTypes: (file.document.children ?? []).slice(0, 12).map((c) => c.type)
+      });
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      lastMessage = message;
+      const is429 =
+        message.includes("429") || message.toLowerCase().includes("too many requests") || message.toLowerCase().includes("rate limit");
+      if (is429 && attempt < maxAttempts) {
+        const backoffMs = attempt === 1 ? 2000 : 5000;
+        figmaTrace("verifyFigmaDesignAccessible: 429 backoff", { attempt, backoffMs });
+        await sleep(backoffMs);
+        continue;
+      }
+      figmaTrace("verifyFigmaDesignAccessible: error", { error: message });
+      return { ok: false, error: message };
+    }
+  }
+  figmaTrace("verifyFigmaDesignAccessible: error", { error: lastMessage ?? "unknown" });
+  return { ok: false, error: lastMessage ?? "Figma verification failed after retries." };
 }
 
 function collectTopLevelFrames(canvas: FigmaFileNode, fileKey: string, fileName: string): DesignNode[] {

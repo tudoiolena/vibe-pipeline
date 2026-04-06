@@ -2,23 +2,47 @@ import { z } from "zod";
 import { PRDSchema, TaskTreeSchema, UIKitSchema } from "@vibe/schema";
 import { type DatabaseClient } from "@vibe/database";
 import { getAnthropicIntelligenceModel } from "../../llm/anthropic";
+import { invokeAnthropicStructuredJson } from "../../llm/invoke-structured-json";
 import { createPipelineNode, type PipelineNode } from "./types";
-import { persistTasksArtifact } from "./shared/persistence";
+import { persistCursorRulesArtifact, persistTasksArtifact } from "./shared/persistence";
+import {
+  llmTaskGeneratorOutputToTaskTree,
+  summarizeTaskTreeForPrompt,
+  LlmTaskGeneratorOutputSchema
+} from "./task-generator-llm-output";
 
 const CursorRuleFileSchema = z.object({
   filename: z.string().min(1),
   content: z.string().min(1)
 });
 
+/** ТЗ §9 — exact handoff filenames for customer repos (lowercase basenames). */
 const REQUIRED_CURSOR_RULE_FILENAMES = [
-  "tech-stack.mdc",
-  "design-tokens.mdc",
-  "architecture.mdc",
-  "business-logic.mdc"
+  "001-project-context.mdc",
+  "002-architecture.mdc",
+  "003-task-execution.mdc",
+  "004-design-sync.mdc",
+  "005-output-format.mdc"
 ] as const;
 
-const ImplementationPlannerModelOutputSchema = z.object({
-  cursorRules: z.array(CursorRuleFileSchema).min(4).max(6)
+const HandoffCursorRuleFilenameSchema = z.enum([
+  "001-project-context.mdc",
+  "002-architecture.mdc",
+  "003-task-execution.mdc",
+  "004-design-sync.mdc",
+  "005-output-format.mdc"
+]);
+
+/** Fixed enum filenames + min content length — avoids empty Anthropic tool `input` from vague open strings. */
+const ImplementationPlannerLlmOutputSchema = z.object({
+  cursorRules: z
+    .array(
+      z.object({
+        filename: HandoffCursorRuleFilenameSchema,
+        content: z.string().min(40)
+      })
+    )
+    .length(5)
 });
 
 type TaskNode = z.infer<typeof TaskTreeSchema>["epics"][number];
@@ -62,19 +86,43 @@ function readUIKitFromState(stateJson: Record<string, unknown>): z.infer<typeof 
   return parsed.success ? parsed.data : UIKitSchema.parse({});
 }
 
+/** Basename, lowercased; strips `.cursor/rules/`, `rules/`, and leading `@` or path junk. */
 function normalizeRuleFilename(name: string): string {
-  return name.trim().toLowerCase().replace(/^@/, "");
+  let n = name.trim().replace(/^@/, "");
+  n = n.replace(/\\/g, "/");
+  const parts = n.split("/").filter(Boolean);
+  n = parts.length > 0 ? parts[parts.length - 1]! : n;
+  n = n.replace(/^\.cursor\/rules\//i, "");
+  return n.toLowerCase();
 }
 
-function assertRequiredCursorRuleFiles(rules: z.infer<typeof CursorRuleFileSchema>[]): void {
-  const names = new Set(rules.map((r) => normalizeRuleFilename(r.filename)));
-  for (const required of REQUIRED_CURSOR_RULE_FILENAMES) {
-    if (!names.has(required)) {
+/** Validates five rules, dedupes by normalized name, persists canonical ТЗ §9 filenames in order. */
+function normalizeAndOrderCursorRules(rules: z.infer<typeof CursorRuleFileSchema>[]): z.infer<typeof CursorRuleFileSchema>[] {
+  if (rules.length !== REQUIRED_CURSOR_RULE_FILENAMES.length) {
+    throw new Error(
+      `Implementation planner: expected exactly ${REQUIRED_CURSOR_RULE_FILENAMES.length} cursor rules, got ${rules.length}.`
+    );
+  }
+  const byKey = new Map<string, z.infer<typeof CursorRuleFileSchema>>();
+  for (const r of rules) {
+    const key = normalizeRuleFilename(r.filename);
+    if (!key.endsWith(".mdc")) {
+      throw new Error(`Implementation planner: rule filename must end with .mdc: "${r.filename}"`);
+    }
+    if (byKey.has(key)) {
+      throw new Error(`Implementation planner: duplicate rule after normalize: "${key}"`);
+    }
+    byKey.set(key, r);
+  }
+  return REQUIRED_CURSOR_RULE_FILENAMES.map((req) => {
+    const hit = byKey.get(req);
+    if (!hit?.content.trim()) {
       throw new Error(
-        `Implementation planner: missing required Cursor rule file "${required}". Got: ${rules.map((r) => r.filename).join(", ")}`
+        `Implementation planner: missing or empty rule "${req}". Got: ${rules.map((x) => x.filename).join(", ")}`
       );
     }
-  }
+    return { filename: req, content: hit.content };
+  });
 }
 
 export function createTaskGeneratorNode(client: DatabaseClient): PipelineNode {
@@ -84,47 +132,39 @@ export function createTaskGeneratorNode(client: DatabaseClient): PipelineNode {
     const uiKit = readUIKitFromState(stateJson);
     const hasFigmaUIKit = uiKit.colorPalette.length > 0 || uiKit.typography.length > 0 || uiKit.componentInventory.length > 0;
 
-    const model = getAnthropicIntelligenceModel().withStructuredOutput(TaskTreeSchema);
-    const output = await model.invoke(
-      [
-        "You are a Senior Technical Lead (TaskGenerator).",
-        "Analyze the PRD and (when present) UI Kit JSON to produce a complete, project-specific implementation backlog.",
-        "",
-        "### TRACEABILITY",
-        "Every epic, task, and subtask MUST set specReferences to the spec-kit files that apply, typically including:",
-        "- 02-prd.md",
-        "- 04-user-stories.md (when tied to stories)",
-        "- 05-acceptance-criteria.md",
-        "- 08-implementation-plan.md",
-        "Use at least 02-prd.md and 05-acceptance-criteria.md on every leaf that has acceptance criteria.",
-        "",
-        "### DECOMPOSITION",
-        "1. One epic per major feature/theme from functional requirements and user stories.",
-        "2. Stack-specific work: if the PRD names Shopify, Supabase, Remix, etc., include concrete tasks (e.g. schema/RLS, theme sections, loaders).",
-        "3. Ordering: foundations → core product → integrations → polish/SEO as appropriate.",
-        "4. Each epic: at least 3–5 children covering setup, implementation, and validation.",
-        "",
-        "### PROJECT DATA",
-        `productOverview: ${prd.productOverview}`,
-        `goals: ${JSON.stringify(prd.goals)}`,
-        `techStack: ${JSON.stringify(prd.techStack)}`,
-        `functionalRequirements: ${JSON.stringify(prd.functionalRequirements)}`,
-        `userStories: ${JSON.stringify(prd.userStories)}`,
-        hasFigmaUIKit ? `uiKit (Figma-derived): ${JSON.stringify(uiKit)}` : "uiKit: not provided — do not invent design tokens in task titles.",
-        "",
-        "Do not emit empty epics. Every title and description must be grounded in this PRD."
-      ].join("\n")
+    const taskPromptBody = [
+      "You are a Senior Technical Lead (TaskGenerator).",
+      "Return a JSON object with root key `epics` (non-empty array).",
+      "Each epic has: externalKey, title, optional description, acceptanceCriteria (string array), specReferences (string array), priority (low|medium|high|critical), and `tasks` (at least 3).",
+      "Each task has: externalKey, title, optional description, acceptanceCriteria, specReferences, priority, and `subtasks` (at least 1).",
+      "Each subtask has: externalKey, title, optional description, acceptanceCriteria, specReferences.",
+      "Do not use a recursive `children` field — only epic.tasks[].subtasks[].",
+      "",
+      "### TRACEABILITY",
+      "Set specReferences on epics/tasks/subtasks where applicable, typically including 02-prd.md, 05-acceptance-criteria.md, 07-implementation-plan.md.",
+      "",
+      "### DECOMPOSITION",
+      "1. One epic per major feature/theme from functional requirements and user stories.",
+      "2. Stack-specific work when the PRD names concrete tech (Shopify, Supabase, Remix, etc.).",
+      "3. Ordering: foundations → core product → integrations → polish as appropriate.",
+      "",
+      "### PROJECT DATA",
+      `productOverview: ${prd.productOverview}`,
+      `goals: ${JSON.stringify(prd.goals)}`,
+      `techStack: ${JSON.stringify(prd.techStack)}`,
+      `functionalRequirements: ${JSON.stringify(prd.functionalRequirements)}`,
+      `userStories: ${JSON.stringify(prd.userStories)}`,
+      hasFigmaUIKit ? `uiKit (Figma-derived): ${JSON.stringify(uiKit)}` : "uiKit: not provided — do not invent design tokens in task titles.",
+      "",
+      "Ground every title in this PRD. externalKey values must be unique across the whole backlog."
+    ].join("\n");
+
+    const llmOut = await invokeAnthropicStructuredJson(
+      getAnthropicIntelligenceModel(),
+      taskPromptBody,
+      LlmTaskGeneratorOutputSchema
     );
-
-    const parsed = TaskTreeSchema.safeParse(output);
-    if (!parsed.success) {
-      throw new Error(`Task generator: LLM output failed TaskTree schema validation: ${JSON.stringify(parsed.error.flatten())}`);
-    }
-    if (parsed.data.epics.length === 0) {
-      throw new Error("Task generator: LLM returned an empty task tree (epics must be non-empty).");
-    }
-
-    const taskTree = ensureTaskTreeUuids(parsed.data);
+    const taskTree = ensureTaskTreeUuids(llmTaskGeneratorOutputToTaskTree(llmOut));
     const persisted = await persistTasksArtifact(client, state, taskTree);
     return {
       currentStage: "tasks",
@@ -140,7 +180,7 @@ export function createTaskGeneratorNode(client: DatabaseClient): PipelineNode {
   });
 }
 
-export function createImplementationPlannerNode(): PipelineNode {
+export function createImplementationPlannerNode(client: DatabaseClient): PipelineNode {
   return createPipelineNode("implementationPlanner", async (state) => {
     const stateJson = state.stateJson as Record<string, unknown>;
     const prd = PRDSchema.parse(stateJson.prd);
@@ -150,46 +190,50 @@ export function createImplementationPlannerNode(): PipelineNode {
       throw new Error("ImplementationPlanner requires non-empty state.tasks before generating cursor rules.");
     }
 
-    const model = getAnthropicIntelligenceModel().withStructuredOutput(ImplementationPlannerModelOutputSchema);
-    const output = await model.invoke(
-      [
-        "You are a Senior Implementation Architect.",
-        "Generate exactly 4–6 Cursor rule files (.mdc) as structured output.",
-        "",
-        "### REQUIRED FILENAMES (exact spelling)",
-        "1. tech-stack.mdc — coding standards for the stack named in the PRD (e.g. Shopify Liquid, Supabase + RLS, Remix loaders, React Server Components).",
-        "2. design-tokens.mdc — map real color hex and font families from the UI Kit JSON to Tailwind / CSS variable instructions; if UI Kit is empty, document a neutral shadcn/Tailwind approach without fake Figma values.",
-        "3. architecture.mdc — enforce Feature-Sliced Design (FSD): layers shared/features/entities/widgets/app (or equivalent), public API per slice, no cross-import violations.",
-        "4. business-logic.mdc — hard constraints from the PRD (policies, compliance, checkout rules, age gates, etc.).",
-        "Optional 5th–6th files: e.g. testing.mdc or observability.mdc if clearly valuable for THIS project.",
-        "",
-        "### CONTENT",
-        "Each file: high-density Markdown with bullets, do/don't, and concrete examples. No filler.",
-        "",
-        "### PROJECT DATA",
-        `PRD overview: ${prd.productOverview}`,
-        `Tech stack: ${JSON.stringify(prd.techStack)}`,
-        `Architecture flow: ${prd.architectureFlow.join(" -> ")}`,
-        `Goals: ${prd.goals.join("; ")}`,
-        `Functional requirements (for business-logic.mdc): ${JSON.stringify(prd.functionalRequirements)}`,
-        `Assumptions: ${JSON.stringify(prd.assumptions)}`,
-        `Risks: ${JSON.stringify(prd.risks)}`,
-        `UI Kit JSON: ${JSON.stringify(uiKit)}`,
-        `Task tree (for traceability): ${JSON.stringify(parsedTasks.data)}`
-      ].join("\n")
-    );
+    const taskSummary = summarizeTaskTreeForPrompt(parsedTasks.data);
+    const plannerPrompt = [
+      "You are a Senior Implementation Architect.",
+      "Return JSON: { \"cursorRules\": [ ... exactly 5 objects ... ] }.",
+      "Each object: { \"filename\": <one of the five names below>, \"content\": <markdown string, min 40 chars> }.",
+      "Use each filename exactly once, in this order: 001-project-context.mdc, 002-architecture.mdc, 003-task-execution.mdc, 004-design-sync.mdc, 005-output-format.mdc.",
+      "Each `content` must be substantive markdown (bullets, do/don't, examples).",
+      "",
+      "### ROLE OF EACH FILE",
+      "1. 001 — `project-spec/` is source of truth; forbid inventing scope outside artifacts.",
+      "2. 002 — Stack/architecture from PRD; FSD-style boundaries if applicable; Cursor workflow note.",
+      "3. 003 — Task-first from 10-tasks.json; trace to acceptance criteria and PRD constraints.",
+      "4. 004 — UI kit / Figma tokens vs neutral Tailwind baseline when kit empty.",
+      "5. 005 — Commits, doc updates, spec file naming, handoff JSON vs markdown.",
+      "",
+      "### PROJECT DATA",
+      `PRD overview: ${prd.productOverview}`,
+      `Tech stack: ${JSON.stringify(prd.techStack)}`,
+      `Architecture flow: ${prd.architectureFlow.join(" -> ")}`,
+      `Goals: ${prd.goals.join("; ")}`,
+      `Functional requirements (summary): ${JSON.stringify(prd.functionalRequirements)}`,
+      `Assumptions: ${JSON.stringify(prd.assumptions)}`,
+      `Risks: ${JSON.stringify(prd.risks)}`,
+      `UI Kit (trimmed): ${JSON.stringify(uiKit).slice(0, 6000)}`,
+      `Task tree summary (compact): ${taskSummary}`
+    ].join("\n");
 
-    const parsedOutput = ImplementationPlannerModelOutputSchema.safeParse(output);
-    if (!parsedOutput.success) {
-      throw new Error(
-        `Implementation planner: LLM output failed schema validation: ${JSON.stringify(parsedOutput.error.flatten())}`
-      );
-    }
-    assertRequiredCursorRuleFiles(parsedOutput.data.cursorRules);
+    const plannerOut = await invokeAnthropicStructuredJson(
+      getAnthropicIntelligenceModel(),
+      plannerPrompt,
+      ImplementationPlannerLlmOutputSchema
+    );
+    const cursorRules = normalizeAndOrderCursorRules(plannerOut.cursorRules);
+    const persisted = await persistCursorRulesArtifact(client, state, cursorRules);
 
     return {
       currentStage: "handoff",
-      stateJson: { ...state.stateJson, cursorRules: parsedOutput.data.cursorRules, workflowStatus: "handoff_prepared" }
+      stateJson: {
+        ...state.stateJson,
+        cursorRules,
+        cursorRulesArtifactId: persisted.id,
+        cursorRulesArtifactVersion: persisted.version,
+        workflowStatus: "handoff_prepared"
+      }
     };
   });
 }

@@ -25,4 +25,5 @@ export {
   type PipelineState,
   type PipelineStateUpdate
 } from "./state";
+export { flattenTaskTreeToRows } from "./nodes/shared/persistence";
 

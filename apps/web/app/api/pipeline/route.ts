@@ -1,96 +1,97 @@
 import { randomUUID } from "node:crypto";
 import { createPipelineGraph, createSessionConfig, pipelineDebug } from "@vibe/ai/graph";
-import { createClient, createProject, createProjectSession, updateProjectSessionById } from "@vibe/database";
-import { extractFigmaFileKeyFromUrl } from "@vibe/integrations";
+import { createClient, createProject, createProjectSession, updateProjectSessionById, type Json } from "@vibe/database";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { parseIntakeFormFieldsForSession, toSlug, DeadlineDateSchema } from "@/lib/pipeline-intake-payload";
 
 export const maxDuration = 300;
 
-const PipelineRequestSchema = z.object({
-  intakeText: z.string().min(1),
-  /** Omitted or empty string means no Figma file key (new sessions have no prior key to clear). */
-  figmaFileKey: z.string().trim().optional()
+const SourceLinkSchema = z.object({
+  label: z.string().min(1),
+  url: z.string().url(),
+  type: z.string().min(1).optional()
 });
 
-function toSlug(value: string): string {
-  const normalized = value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .trim()
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .slice(0, 48);
-
-  return normalized.length > 0 ? normalized : "project";
-}
-
-function toProjectName(value: string): string {
-  const tokens = value
-    .replace(/[^\w\s-]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 6);
-
-  if (tokens.length === 0) {
-    return "Untitled Project";
-  }
-
-  return tokens.map((token) => token.slice(0, 1).toUpperCase() + token.slice(1)).join(" ");
-}
-
-/**
- * Resolves a Figma file key from raw intake when the client did not pass `figmaFileKey`.
- * Matches `figma.com/design/:key` (and branch URLs) the same way as {@link extractFigmaFileKeyFromUrl}.
- */
-function extractFigmaFileKeyFromIntakeText(text: string): string | undefined {
-  for (const match of text.matchAll(/https?:\/\/[^\s<>"')]+/gi)) {
-    const key = extractFigmaFileKeyFromUrl(match[0]);
-    if (key) {
-      return key;
+const PipelineRequestSchema = z
+  .object({
+    projectName: z.string().optional(),
+    clientName: z.string().optional(),
+    businessGoal: z.string().optional(),
+    targetUsers: z.string().optional(),
+    constraints: z.string().optional(),
+    rawBrief: z.string().optional(),
+    figmaUrl: z.string().trim().optional(),
+    repoUrl: z.string().trim().optional(),
+    /** One URL per line; merged with `references` when both sent (array wins for duplicates). */
+    referencesText: z.string().optional(),
+    references: z.array(SourceLinkSchema).optional(),
+    deadline: z.union([DeadlineDateSchema, z.literal("")]).optional()
+  })
+  .superRefine((data, ctx) => {
+    const brief = (data.rawBrief ?? "").trim();
+    if (brief.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Provide rawBrief (non-empty).",
+        path: ["rawBrief"]
+      });
     }
-  }
-  const branchMatch = text.match(/figma\.com\/design\/[A-Za-z0-9]+\/branch\/([A-Za-z0-9]+)/i);
-  if (branchMatch?.[1]) {
-    return branchMatch[1];
-  }
-  const designMatch = text.match(/figma\.com\/(?:design|file|proto)\/([A-Za-z0-9]+)(?:\/|[\s?"'#]|$)/i);
-  if (designMatch?.[1]) {
-    return designMatch[1];
-  }
-  return undefined;
-}
+  });
 
 export async function POST(request: Request) {
   const requestJson: unknown = await request.json().catch(() => null);
   const parsedBody = PipelineRequestSchema.safeParse(requestJson);
 
   if (!parsedBody.success) {
-    return NextResponse.json({ error: "Invalid request body. intakeText is required." }, { status: 400 });
+    const msg = parsedBody.error.issues[0]?.message ?? "Invalid request body.";
+    return NextResponse.json({ error: msg }, { status: 400 });
   }
 
-  const intakeText = parsedBody.data.intakeText.trim();
-  const figmaRaw = parsedBody.data.figmaFileKey?.trim();
-  let figmaFileKey = figmaRaw && figmaRaw.length > 0 ? figmaRaw : undefined;
-  if (!figmaFileKey) {
-    const fromText = extractFigmaFileKeyFromIntakeText(intakeText);
-    if (fromText) {
-      figmaFileKey = fromText;
-    }
+  const body = parsedBody.data;
+  const parsedIntake = parseIntakeFormFieldsForSession({
+    rawBrief: body.rawBrief ?? "",
+    projectName: body.projectName,
+    clientName: body.clientName,
+    businessGoal: body.businessGoal,
+    targetUsers: body.targetUsers,
+    constraints: body.constraints,
+    figmaUrl: body.figmaUrl,
+    repoUrl: body.repoUrl,
+    referencesText: body.referencesText,
+    references: body.references,
+    deadline: body.deadline
+  });
+  if (!parsedIntake.ok) {
+    return NextResponse.json({ error: parsedIntake.error }, { status: 400 });
   }
+
+  const {
+    effectiveBrief,
+    sessionStateSlice: sessionStateJson,
+    projectUpdate,
+    sourceFigmaUrl,
+    sourceLinks
+  } = parsedIntake;
+  const projectName = typeof sessionStateJson.intakeProjectName === "string" ? sessionStateJson.intakeProjectName : "";
+
   const client = createClient();
 
-  const sessionStateJson: Record<string, string> = { rawIntakeText: intakeText };
-  if (figmaFileKey) {
-    sessionStateJson.figmaFileKey = figmaFileKey;
-  }
-
-  const slugBase = toSlug(intakeText);
+  const slugBase = toSlug(projectName + "-" + effectiveBrief.slice(0, 24));
   const { data: project, error: projectError } = await createProject(client, {
     slug: `${slugBase}-${Date.now()}`,
-    name: toProjectName(intakeText),
-    description: intakeText,
-    status: "intake"
+    name: projectUpdate.name ?? projectName,
+    description: projectUpdate.description ?? effectiveBrief,
+    status: "intake",
+    source_figma_url: sourceFigmaUrl,
+    source_repo_url: projectUpdate.source_repo_url ?? null,
+    source_links: sourceLinks as unknown as Json,
+    client_name: projectUpdate.client_name ?? null,
+    business_goal: projectUpdate.business_goal ?? null,
+    target_users: projectUpdate.target_users ?? null,
+    constraints: projectUpdate.constraints ?? null,
+    raw_brief: effectiveBrief,
+    deadline: projectUpdate.deadline ?? null
   });
 
   if (projectError || !project) {
@@ -105,7 +106,7 @@ export async function POST(request: Request) {
     project_id: project.id,
     current_stage: "intake",
     graph_status: "idle",
-    state_json: sessionStateJson
+    state_json: sessionStateJson as Json
   });
 
   if (sessionError || !session) {

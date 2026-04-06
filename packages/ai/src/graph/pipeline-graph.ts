@@ -24,7 +24,7 @@ export function createPipelineGraph(client: DatabaseClient) {
   const applyClarificationNode = createApplyClarificationNode(client);
   const prdDesignerNode = createPrdDesignerNode(client);
   const taskGeneratorNode = createTaskGeneratorNode(client);
-  const implementationPlannerNode = createImplementationPlannerNode();
+  const implementationPlannerNode = createImplementationPlannerNode(client);
   const designAnalysisNode = createDesignAnalysisNode(client);
 
   const graph = new StateGraph(PipelineStateSchema)

@@ -26,6 +26,7 @@
 
 ## Scope Boundaries
 - Cursor handoff is file-based only through artifacts and `.cursor/rules`.
+- Superpowers, Continue, and similar Cursor-side tools are **not** controlled by the platform; the product supplies alignment via exported specs, rules, and checklists.
 - Playwright/Continue/Snyk in MVP may be implemented via exported plans/checklists, not full automation.
 - Figma sync is limited to metadata/context pull and mapping, without bidirectional design sync.
 

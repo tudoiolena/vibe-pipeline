@@ -15,6 +15,7 @@ import {
   type TaskTreeSchema
 } from "@vibe/schema";
 import type { PipelineState } from "../../state";
+import { resolveFigmaFileKeyFromProject } from "./figma-project-key";
 
 type TaskNode = z.infer<typeof TaskTreeSchema>["epics"][number];
 
@@ -162,29 +163,6 @@ async function resolveProjectIdForSync(
   return resolveProjectId(client, sessionId);
 }
 
-/** Reads `figmaFileKey` from the LangGraph checkpoint envelope on `project_sessions.state_json`. */
-function readFigmaFileKeyFromSessionStateJson(stateJson: Json): string | null {
-  if (!stateJson || typeof stateJson !== "object" || Array.isArray(stateJson)) {
-    return null;
-  }
-  const envelope = stateJson as Record<string, unknown>;
-  const pipelineState = envelope.pipelineState as Record<string, unknown> | undefined;
-  const inner = pipelineState?.stateJson as Record<string, unknown> | undefined;
-  const key = inner?.figmaFileKey;
-  return typeof key === "string" && key.trim().length > 0 ? key.trim() : null;
-}
-
-async function readFigmaFileKeyForSession(client: DatabaseClient, sessionId: string): Promise<string | null> {
-  const { data, error } = await client.from("project_sessions").select("state_json").eq("id", sessionId).maybeSingle();
-  if (error) {
-    console.error("[persistence] readFigmaFileKeyForSession failed:", error.message);
-    return null;
-  }
-  if (!data?.state_json) {
-    return null;
-  }
-  return readFigmaFileKeyFromSessionStateJson(data.state_json as Json);
-}
 
 function mapGapTypeToCategory(
   gap: GapItem
@@ -530,10 +508,16 @@ export async function syncTasks(
 export async function syncDesignTaskLinks(client: DatabaseClient, sessionId: string, links: DesignLink[]): Promise<void> {
   try {
     const projectId = await resolveProjectId(client, sessionId);
-    const figmaFileKey = await readFigmaFileKeyForSession(client, sessionId);
-    if (!projectId || !figmaFileKey) {
+    if (!projectId) {
       if (links.length > 0) {
-        console.error("[syncDesignTaskLinks] missing project_id or figmaFileKey on session; skipping link sync");
+        console.error("[syncDesignTaskLinks] missing project_id on session; skipping link sync");
+      }
+      return;
+    }
+    const figmaFileKey = await resolveFigmaFileKeyFromProject(client, projectId);
+    if (!figmaFileKey) {
+      if (links.length > 0) {
+        console.error("[syncDesignTaskLinks] missing Figma file key on project (source_figma_url); skipping link sync");
       }
       return;
     }
@@ -700,5 +684,79 @@ export async function persistTasksArtifact(
     projectId: state.projectId,
     taskTree
   });
+  return { id: artifact.id, version: artifact.version };
+}
+
+export async function persistDesignMapArtifact(
+  client: DatabaseClient,
+  state: PipelineState,
+  designMap: z.infer<typeof DesignMapSchema>
+): Promise<{ id: string; version: number }> {
+  const { data: latest, error: latestError } = await getLatestArtifactVersion(client, state.projectId, "design_map");
+  if (latestError) {
+    throw new Error(`Failed to resolve latest design_map artifact version: ${latestError.message}`);
+  }
+  const { data: artifact, error: createError } = await createArtifactVersion(client, {
+    project_id: state.projectId,
+    session_id: state.sessionId,
+    artifact_type: "design_map",
+    format: "json",
+    version: (latest?.version ?? 0) + 1,
+    status: "draft",
+    content_json: designMap as unknown as Json
+  });
+  if (createError || !artifact) {
+    throw new Error(`Failed to persist design_map artifact: ${createError?.message ?? "unknown insert error"}`);
+  }
+  return { id: artifact.id, version: artifact.version };
+}
+
+export async function persistUIKitArtifact(
+  client: DatabaseClient,
+  state: PipelineState,
+  uiKit: z.infer<typeof UIKitSchema>
+): Promise<{ id: string; version: number }> {
+  const { data: latest, error: latestError } = await getLatestArtifactVersion(client, state.projectId, "ui_kit");
+  if (latestError) {
+    throw new Error(`Failed to resolve latest ui_kit artifact version: ${latestError.message}`);
+  }
+  const { data: artifact, error: createError } = await createArtifactVersion(client, {
+    project_id: state.projectId,
+    session_id: state.sessionId,
+    artifact_type: "ui_kit",
+    format: "json",
+    version: (latest?.version ?? 0) + 1,
+    status: "draft",
+    content_json: uiKit as unknown as Json
+  });
+  if (createError || !artifact) {
+    throw new Error(`Failed to persist ui_kit artifact: ${createError?.message ?? "unknown insert error"}`);
+  }
+  return { id: artifact.id, version: artifact.version };
+}
+
+export type CursorRuleArtifactFile = { filename: string; content: string };
+
+export async function persistCursorRulesArtifact(
+  client: DatabaseClient,
+  state: PipelineState,
+  cursorRules: CursorRuleArtifactFile[]
+): Promise<{ id: string; version: number }> {
+  const { data: latest, error: latestError } = await getLatestArtifactVersion(client, state.projectId, "cursor_rules");
+  if (latestError) {
+    throw new Error(`Failed to resolve latest cursor_rules artifact version: ${latestError.message}`);
+  }
+  const { data: artifact, error: createError } = await createArtifactVersion(client, {
+    project_id: state.projectId,
+    session_id: state.sessionId,
+    artifact_type: "cursor_rules",
+    format: "json",
+    version: (latest?.version ?? 0) + 1,
+    status: "draft",
+    content_json: cursorRules as unknown as Json
+  });
+  if (createError || !artifact) {
+    throw new Error(`Failed to persist cursor_rules artifact: ${createError?.message ?? "unknown insert error"}`);
+  }
   return { id: artifact.id, version: artifact.version };
 }

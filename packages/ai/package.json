@@ -11,9 +11,13 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test:pipeline": "tsx src/scripts/test-pipeline.ts"
+    "test:pipeline": "dotenv -e ../../.env -- tsx src/scripts/test-pipeline.ts",
+    "test:pipeline:full": "dotenv -e ../../.env -- tsx src/scripts/test-pipeline.ts --skip-clarification-gate",
+    "test:pipeline:strict": "dotenv -e ../../.env -- tsx src/scripts/test-pipeline.ts --strict-handoff",
+    "backfill:handoff-artifacts": "dotenv -e ../../.env -- tsx src/scripts/backfill-handoff-artifacts-from-checkpoints.ts"
   },
   "devDependencies": {
+    "dotenv": "^16.4.7",
     "tsx": "^4.20.6"
   },
   "dependencies": {

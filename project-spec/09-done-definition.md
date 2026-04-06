@@ -39,6 +39,7 @@
 ## 7) Handoff Gate
 - `project-spec` package is complete and internally consistent.
 - `.cursor/rules` are generated and aligned with current artifacts.
+- Handoff documentation clarifies that Cursor-side tools (e.g. Superpowers) are optional and aligned via files, not by the web app.
 - Export to repository and Linear completes without blocking errors.
 - README/setup guide enables a clean local run.
 

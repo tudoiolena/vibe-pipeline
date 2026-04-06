@@ -1,9 +1,11 @@
 import { type PersistedCheckpointEnvelope } from "@vibe/ai/graph";
-import { createClient, getProjectSessionById } from "@vibe/database";
+import { createClient, getProjectById, getProjectSessionById, type ProjectRow } from "@vibe/database";
+import { extractFigmaFileKeyFromUrl } from "@vibe/integrations";
 import { BriefSchema, PRDSchema } from "@vibe/schema";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getPipelineStageLabel } from "@/lib/pipeline-stage-labels";
+import { buildHydratedStructuredIntake } from "@/lib/session-intake-hydration";
 
 const GapSchema = z.object({
   title: z.string(),
@@ -28,9 +30,14 @@ function parseEnvelope(stateJson: unknown): PersistedCheckpointEnvelope | null {
   return candidate as PersistedCheckpointEnvelope;
 }
 
-function buildHydratedIntake(stateJson: Record<string, unknown>): {
+function buildHydratedIntake(
+  stateJson: Record<string, unknown>,
+  projectSourceFigmaUrl: string | null,
+  projectRow: ProjectRow | null
+): {
   intakeText: string;
   figmaDesignUrl?: string;
+  structured: ReturnType<typeof buildHydratedStructuredIntake>;
 } {
   const briefParsed = BriefSchema.safeParse(stateJson.brief);
   let intakeText = "";
@@ -47,14 +54,31 @@ function buildHydratedIntake(stateJson: Record<string, unknown>): {
     }
   }
 
-  const figmaKey =
-    typeof stateJson.figmaFileKey === "string" && stateJson.figmaFileKey.trim().length > 0
-      ? stateJson.figmaFileKey.trim()
-      : null;
+  const stored = projectSourceFigmaUrl?.trim() ?? "";
+  const figmaDesignUrl =
+    stored.length > 0
+      ? stored
+      : typeof stateJson.figmaFileKey === "string" && stateJson.figmaFileKey.trim().length > 0
+        ? `https://www.figma.com/design/${encodeURIComponent(stateJson.figmaFileKey.trim())}/file`
+        : undefined;
 
-  const figmaDesignUrl = figmaKey ? `https://www.figma.com/design/${encodeURIComponent(figmaKey)}/file` : undefined;
+  const structured = buildHydratedStructuredIntake(
+    stateJson,
+    projectRow
+      ? {
+          name: projectRow.name,
+          client_name: projectRow.client_name,
+          business_goal: projectRow.business_goal,
+          target_users: projectRow.target_users,
+          constraints: projectRow.constraints,
+          deadline: projectRow.deadline,
+          source_repo_url: projectRow.source_repo_url,
+          source_links: projectRow.source_links
+        }
+      : null
+  );
 
-  return { intakeText, ...(figmaDesignUrl ? { figmaDesignUrl } : {}) };
+  return { intakeText, structured, ...(figmaDesignUrl ? { figmaDesignUrl } : {}) };
 }
 
 function clarificationRoundsFromStateJson(stateJson: Record<string, unknown>): string[] {
@@ -97,6 +121,12 @@ export async function GET(_request: Request, context: { params: Promise<{ sessio
     return NextResponse.json({ error: "Session not found." }, { status: 404 });
   }
 
+  const { data: projectRow } = await getProjectById(client, session.project_id);
+  const projectSourceFigmaUrl =
+    typeof projectRow?.source_figma_url === "string" && projectRow.source_figma_url.trim().length > 0
+      ? projectRow.source_figma_url.trim()
+      : null;
+
   const envelope = parseEnvelope(session.state_json);
   const stateJson = (envelope?.pipelineState.stateJson ?? {}) as Record<string, unknown>;
   const gapAnalysisRaw = stateJson.gapAnalysis;
@@ -105,12 +135,17 @@ export async function GET(_request: Request, context: { params: Promise<{ sessio
 
   const needsClarification = stateJson.needsClarification === true;
 
-  const hydratedIntake = buildHydratedIntake(stateJson);
+  const hydratedIntake = buildHydratedIntake(stateJson, projectSourceFigmaUrl, projectRow ?? null);
 
+  const figmaFileKeyFromProject = projectSourceFigmaUrl
+    ? extractFigmaFileKeyFromUrl(projectSourceFigmaUrl) ??
+      (/^[A-Za-z0-9]+$/.test(projectSourceFigmaUrl) ? projectSourceFigmaUrl : null)
+    : null;
   const figmaFileKey =
-    typeof stateJson.figmaFileKey === "string" && stateJson.figmaFileKey.trim().length > 0
+    figmaFileKeyFromProject ??
+    (typeof stateJson.figmaFileKey === "string" && stateJson.figmaFileKey.trim().length > 0
       ? stateJson.figmaFileKey.trim()
-      : null;
+      : null);
 
   const workflowStatus = typeof stateJson.workflowStatus === "string" ? stateJson.workflowStatus : null;
   const hasPrd = PRDSchema.safeParse(stateJson.prd).success;

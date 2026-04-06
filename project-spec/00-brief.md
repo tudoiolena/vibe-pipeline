@@ -41,7 +41,7 @@ Provide a predictable, repeatable workflow for project preparation in vibe codin
 - Frontend: Next.js, TypeScript, Tailwind CSS, shadcn/ui.
 - Backend/orchestration: Next.js server actions/route handlers, LangGraph (or equivalent), Zod.
 - Database: Supabase Postgres.
-- Integrations: Cursor, Figma MCP, Linear, Playwright, Continue, Snyk, Superpowers.
+- Integrations: Cursor (file handoff), Figma MCP, Linear, Playwright, Continue, Snyk; Superpowers as optional Cursor-side workflow discipline aligned through exported `project-spec/` and `.cursor/rules` (not server-driven).
 
 ## MVP Outcome
 The system generates and stores a complete artifact package in `project-spec/` and `.cursor/rules/` as the source of truth for AI coding workflows.

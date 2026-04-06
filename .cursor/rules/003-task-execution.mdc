@@ -26,3 +26,7 @@ Follow implementation phases in sequence unless explicitly overridden:
 ## Scope Guard
 - Reject out-of-scope MVP work by default.
 - If a change is needed outside scope, record it as post-MVP backlog.
+
+## Optional workflow reinforcement
+- With the Superpowers plugin in Cursor, use it to keep execution spec-first and evidence-based (plan or break down work, verify before completion).
+- Without Superpowers, enforce the same behavior via this file and `project-spec/*`.

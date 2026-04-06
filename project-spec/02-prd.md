@@ -98,7 +98,9 @@ Minimum entities: `projects`, `project_sessions`, `clarifications`, `artifacts`,
 - **Playwright**: smoke/e2e test plan structure.
 - **Continue**: PR guard-check templates.
 - **Snyk**: security gate checklist.
-- **Superpowers**: task-first/spec-first execution discipline.
+- **Superpowers**: task-first/spec-first execution discipline via the **optional** Cursor Superpowers plugin on the developer machine.
+  - The web application **does not** install, configure, or invoke Superpowers at runtime (same boundary as Cursor: file-based handoff only).
+  - MVP satisfies this integration by: (1) `project-spec/` and generated `.cursor/rules` as the source of truth, (2) implementation/handoff content that recommends Superpowers and maps work to spec-approved artifacts.
 
 ## 12) UX Requirements by Screens
 - Project Intake

@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { BriefSchema, DesignTaskRelationSchema, StageSchema } from "@vibe/schema";
-import { extractFigmaFileKeyFromUrl, verifyFigmaDesignAccessible } from "@vibe/integrations";
+import { verifyFigmaDesignAccessible } from "@vibe/integrations";
 import { type DatabaseClient, updateProjectSessionById } from "@vibe/database";
 import { getAnthropicIntelligenceModel } from "../../llm/anthropic";
 import type { PipelineState } from "../state";
 import { createPipelineNode, type PipelineNode } from "./types";
 import { appendClarificationTimelineEvent, persistBriefArtifact, syncPipelineEntity } from "./shared/persistence";
+import { projectHasStoredFigmaSource, resolveFigmaFileKeyFromProject } from "./shared/figma-project-key";
 
 const RawIntakeSourceLinkSchema = z.object({
   label: z.string().min(1),
@@ -83,6 +84,82 @@ const ScaleRequirementKeywords = [
   "peak"
 ] as const;
 
+/** CamelCase keys written by POST /api/pipeline from the structured intake form. */
+export type StructuredIntakeFromState = {
+  projectName?: string;
+  clientName?: string;
+  businessGoal?: string;
+  targetUsers?: string;
+  constraints?: string;
+  /** YYYY-MM-DD when provided by the form. */
+  deadline?: string;
+  repoUrl?: string;
+};
+
+function readStringField(stateJson: Record<string, unknown>, key: string): string | undefined {
+  const v = stateJson[key];
+  if (typeof v !== "string") {
+    return undefined;
+  }
+  const t = v.trim();
+  return t.length > 0 ? t : undefined;
+}
+
+export function readStructuredIntakeFromState(state: PipelineState): StructuredIntakeFromState {
+  const j = state.stateJson as Record<string, unknown>;
+  const out: StructuredIntakeFromState = {};
+  const projectName = readStringField(j, "intakeProjectName");
+  const clientName = readStringField(j, "intakeClientName");
+  const businessGoal = readStringField(j, "intakeBusinessGoal");
+  const targetUsers = readStringField(j, "intakeTargetUsers");
+  const constraints = readStringField(j, "intakeConstraints");
+  const deadline = readStringField(j, "intakeDeadline");
+  const repoUrl = readStringField(j, "intakeRepoUrl");
+  if (projectName) {
+    out.projectName = projectName;
+  }
+  if (clientName) {
+    out.clientName = clientName;
+  }
+  if (businessGoal) {
+    out.businessGoal = businessGoal;
+  }
+  if (targetUsers) {
+    out.targetUsers = targetUsers;
+  }
+  if (constraints) {
+    out.constraints = constraints;
+  }
+  if (deadline) {
+    out.deadline = deadline;
+  }
+  if (repoUrl) {
+    out.repoUrl = repoUrl;
+  }
+  return out;
+}
+
+function parseLinkArray(candidate: unknown): z.infer<typeof RawIntakeSourceLinkSchema>[] {
+  const parsed = z.array(RawIntakeSourceLinkSchema).safeParse(candidate);
+  return parsed.success ? parsed.data : [];
+}
+
+function dedupeSourceLinksByUrl(
+  links: z.infer<typeof RawIntakeSourceLinkSchema>[]
+): z.infer<typeof RawIntakeSourceLinkSchema>[] {
+  const seen = new Set<string>();
+  const out: z.infer<typeof RawIntakeSourceLinkSchema>[] = [];
+  for (const link of links) {
+    const key = link.url.trim().toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(link);
+  }
+  return out;
+}
+
 function peekRawIntakeText(state: PipelineState): string | null {
   const stateJson = state.stateJson as Record<string, unknown>;
   const rawCandidates = [stateJson.rawIntakeText, stateJson.intakeText, stateJson.rawBrief, stateJson.inputText];
@@ -106,14 +183,19 @@ function readRawIntakeText(state: PipelineState): string {
 
 function readRawSourceLinks(state: PipelineState): z.infer<typeof RawIntakeSourceLinkSchema>[] {
   const stateJson = state.stateJson as Record<string, unknown>;
-  const candidate = stateJson.sourceLinks ?? stateJson.intakeSourceLinks;
-  const parsed = z.array(RawIntakeSourceLinkSchema).safeParse(candidate);
-  return parsed.success ? parsed.data : [];
+  const fromLegacy = parseLinkArray(stateJson.sourceLinks);
+  const fromIntake = parseLinkArray(stateJson.intakeSourceLinks);
+  return dedupeSourceLinksByUrl([...fromLegacy, ...fromIntake]);
 }
 
+/**
+ * Fallback brief: `summary` is always the full raw narrative. Structured fields only enrich
+ * name, goal, audience, optional metadata — they never replace the raw brief text in `summary`.
+ */
 function buildFallbackBrief(
   rawIntakeText: string,
-  sourceLinks: z.infer<typeof RawIntakeSourceLinkSchema>[]
+  sourceLinks: z.infer<typeof RawIntakeSourceLinkSchema>[],
+  structured?: StructuredIntakeFromState
 ): z.infer<typeof BriefSchema> {
   const normalizedName = rawIntakeText
     .replace(/[^\w\s-]/g, " ")
@@ -122,17 +204,82 @@ function buildFallbackBrief(
     .slice(0, 5)
     .join(" ")
     .trim();
+  const derivedName = normalizedName.length > 0 ? normalizedName : "Untitled Product";
+  const name = structured?.projectName?.trim() || derivedName;
+  const defaultGoal = "Clarify the request and shape it into an implementation-ready product plan.";
+  const goal = structured?.businessGoal?.trim() || defaultGoal;
+
+  let targetAudience: string[];
+  if (structured?.targetUsers?.trim()) {
+    const lines = structured.targetUsers
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    targetAudience = lines.length > 0 ? lines : ["TBD"];
+  } else {
+    targetAudience = ["TBD"];
+  }
+
   return {
-    name: normalizedName.length > 0 ? normalizedName : "Untitled Product",
+    name,
     summary: rawIntakeText,
     problem: [rawIntakeText],
-    goal: "Clarify the request and shape it into an implementation-ready product plan.",
-    targetAudience: ["TBD"],
+    goal,
+    targetAudience,
     businessValue: ["TBD"],
     keyUserScenarios: ["Define core user journey from intake brief."],
     mvpFocus: ["Capture a minimal, validated scope before PRD drafting."],
-    sourceLinks
+    sourceLinks,
+    ...(structured?.clientName?.trim() ? { clientName: structured.clientName.trim() } : {}),
+    ...(structured?.constraints?.trim() ? { constraints: structured.constraints.trim() } : {}),
+    ...(structured?.deadline?.trim() ? { deadline: structured.deadline.trim() } : {}),
+    ...(structured?.businessGoal?.trim() ? { businessGoal: structured.businessGoal.trim() } : {})
   };
+}
+
+function mergeLlmBriefWithStructuredIntake(
+  brief: z.infer<typeof BriefSchema>,
+  structured: StructuredIntakeFromState,
+  mergedIntakeSourceLinks: z.infer<typeof RawIntakeSourceLinkSchema>[]
+): z.infer<typeof BriefSchema> {
+  const next: z.infer<typeof BriefSchema> = { ...brief };
+  if (structured.projectName?.trim()) {
+    next.name = structured.projectName.trim();
+  }
+  if (structured.clientName?.trim()) {
+    next.clientName = structured.clientName.trim();
+  }
+  if (structured.constraints?.trim()) {
+    next.constraints = structured.constraints.trim();
+  }
+  if (structured.deadline?.trim()) {
+    next.deadline = structured.deadline.trim();
+  }
+  if (structured.businessGoal?.trim()) {
+    next.businessGoal = structured.businessGoal.trim();
+    next.goal = structured.businessGoal.trim();
+  }
+  if (structured.targetUsers?.trim()) {
+    const lines = structured.targetUsers
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (lines.length > 0) {
+      next.targetAudience = lines;
+    }
+  }
+
+  const extras: z.infer<typeof RawIntakeSourceLinkSchema>[] = [...mergedIntakeSourceLinks];
+  if (structured.repoUrl?.trim()) {
+    extras.push({
+      label: "Repository",
+      url: structured.repoUrl.trim(),
+      type: "repository"
+    });
+  }
+  next.sourceLinks = dedupeSourceLinksByUrl([...next.sourceLinks, ...extras]);
+
+  return BriefSchema.parse(next);
 }
 
 function briefText(brief: z.infer<typeof BriefSchema>): string {
@@ -140,6 +287,10 @@ function briefText(brief: z.infer<typeof BriefSchema>): string {
     brief.name,
     brief.summary,
     brief.goal,
+    brief.clientName ?? "",
+    brief.constraints ?? "",
+    brief.deadline ?? "",
+    brief.businessGoal ?? "",
     ...brief.problem,
     ...brief.targetAudience,
     ...brief.businessValue,
@@ -154,42 +305,6 @@ function includesKeyword(haystack: string, keywords: readonly string[]): boolean
   return keywords.some((keyword) => haystack.includes(keyword));
 }
 
-function hasFigmaUrlInSourceLinks(sourceLinks: z.infer<typeof BriefSchema>["sourceLinks"]): boolean {
-  return sourceLinks.some((link) => {
-    const url = link.url.trim().toLowerCase();
-    return url.includes("figma.com");
-  });
-}
-
-function hasProvidedFigmaDesign(state: PipelineState, brief: z.infer<typeof BriefSchema>): boolean {
-  const stateJson = state.stateJson as Record<string, unknown>;
-  const figmaFileKey =
-    typeof stateJson.figmaFileKey === "string" && stateJson.figmaFileKey.trim().length > 0 ? stateJson.figmaFileKey.trim() : null;
-  return Boolean(figmaFileKey) || hasFigmaUrlInSourceLinks(brief.sourceLinks);
-}
-
-/** Resolves Figma file key from session or first figma.com source link (authorized REST / MCP-equivalent reads). */
-export function resolveFigmaFileKeyForPipeline(state: PipelineState, brief: z.infer<typeof BriefSchema>): string | null {
-  const stateJson = state.stateJson as Record<string, unknown>;
-  const fromState =
-    typeof stateJson.figmaFileKey === "string" && stateJson.figmaFileKey.trim().length > 0 ? stateJson.figmaFileKey.trim() : null;
-  if (fromState) {
-    console.log("[figma] resolveFigmaFileKeyForPipeline", { source: "stateJson.figmaFileKey", fileKey: fromState });
-    return fromState;
-  }
-  const figmaLink = brief.sourceLinks.find((link) => link.url.toLowerCase().includes("figma.com"));
-  if (!figmaLink) {
-    return null;
-  }
-  const extracted = extractFigmaFileKeyFromUrl(figmaLink.url);
-  console.log("[figma] resolveFigmaFileKeyForPipeline", {
-    source: "brief.sourceLinks",
-    fileKey: extracted,
-    urlPreview: figmaLink.url.slice(0, 120),
-    parseOk: Boolean(extracted)
-  });
-  return extracted;
-}
 
 function normalizePrimaryFigmaSourceLink(
   brief: z.infer<typeof BriefSchema>,
@@ -326,7 +441,7 @@ export function readBriefFromState(state: PipelineState): z.infer<typeof BriefSc
   const raw = peekRawIntakeText(state);
   if (raw) {
     console.warn("[readBriefFromState] stateJson.brief invalid; falling back to synthetic brief.");
-    return buildFallbackBrief(raw, readRawSourceLinks(state));
+    return buildFallbackBrief(raw, readRawSourceLinks(state), readStructuredIntakeFromState(state));
   }
   throw new Error(
     "Pipeline node requires stateJson.brief or raw intake text (rawIntakeText, intakeText, rawBrief, inputText)."
@@ -342,6 +457,21 @@ export function createIntakeNormalizerNode(client: DatabaseClient): PipelineNode
   return createPipelineNode("intakeNormalizer", async (state) => {
     const rawIntakeText = readRawIntakeText(state);
     const sourceLinks = readRawSourceLinks(state);
+    const structured = readStructuredIntakeFromState(state);
+    const structuredBlock =
+      Object.keys(structured).length > 0
+        ? [
+            "### Structured intake (authoritative)",
+            "These fields were provided explicitly on the intake form. Your output MUST align with them — do not contradict or drop them.",
+            "Set optional Brief fields clientName, constraints, deadline, businessGoal when the structured data provides them.",
+            "Use `businessGoal` for the intake business-goal text; set `goal` to the same value when business goal is provided, otherwise infer goal from the raw brief.",
+            "When `targetUsers` is provided (may be multiline), split into `targetAudience` array entries (one per non-empty line).",
+            "When `projectName` is provided, `name` must match it exactly.",
+            JSON.stringify(structured, null, 2),
+            ""
+          ].join("\n")
+        : "";
+
     let brief: z.infer<typeof BriefSchema>;
     try {
       const model = getAnthropicIntelligenceModel().withStructuredOutput(BriefSchema);
@@ -352,17 +482,26 @@ export function createIntakeNormalizerNode(client: DatabaseClient): PipelineNode
           "CRITICAL: Detect Figma URLs both in the intake text and in provided source links.",
           "If any Figma URL exists, include it in sourceLinks and set its label exactly to: 'Primary Figma Design'.",
           "Do not drop existing non-Figma source links.",
+          "`summary` must retain the substance of the raw intake narrative (you may tighten wording but do not replace it with unrelated content).",
+          "Populate `problem`, `businessValue`, `keyUserScenarios`, and `mvpFocus` with substantive bullets whenever the raw text implies them — do not leave generic placeholders if the narrative already describes KPIs, personas, journeys, or MVP scope.",
           "",
+          structuredBlock,
           "Raw Intake:",
           rawIntakeText,
-          "Provided Source Links:",
+          "Provided Source Links (merged from session):",
           JSON.stringify(sourceLinks, null, 2)
         ].join("\n")
       );
-      brief = normalizePrimaryFigmaSourceLink(BriefSchema.parse(briefOutput), rawIntakeText, sourceLinks);
+      const parsed = BriefSchema.parse(briefOutput);
+      brief = mergeLlmBriefWithStructuredIntake(parsed, structured, sourceLinks);
+      brief = normalizePrimaryFigmaSourceLink(brief, rawIntakeText, sourceLinks);
     } catch (error) {
       console.warn(`[intakeNormalizer] Falling back to deterministic normalization: ${String(error)}`);
-      brief = normalizePrimaryFigmaSourceLink(buildFallbackBrief(rawIntakeText, sourceLinks), rawIntakeText, sourceLinks);
+      brief = normalizePrimaryFigmaSourceLink(
+        buildFallbackBrief(rawIntakeText, sourceLinks, structured),
+        rawIntakeText,
+        sourceLinks
+      );
     }
     const persisted = await persistBriefArtifact(client, state, brief);
     return {
@@ -378,23 +517,86 @@ export function createIntakeNormalizerNode(client: DatabaseClient): PipelineNode
   });
 }
 
+function readPriorFigmaVerification(stateJson: Record<string, unknown>, resolvedKey: string | null): { verified: boolean } {
+  if (!resolvedKey) {
+    return { verified: false };
+  }
+  const priorKey = typeof stateJson.figmaFileKey === "string" ? stateJson.figmaFileKey.trim() : "";
+  if (priorKey !== resolvedKey) {
+    return { verified: false };
+  }
+  return { verified: stateJson.figmaLinkVerified === true };
+}
+
+function isFigmaRateLimitError(message: string | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  const m = message.toLowerCase();
+  return message.includes("429") || m.includes("too many requests") || m.includes("rate limit");
+}
+
+/** If we ever verified this file in-session, don't let a transient 429 flip design-truth off. */
+function timelineHadFigmaVerifiedForKey(stateJson: Record<string, unknown>, fileKey: string): boolean {
+  const raw = stateJson.clarificationTimestamps;
+  if (!Array.isArray(raw)) {
+    return false;
+  }
+  const k = fileKey.trim();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const o = entry as Record<string, unknown>;
+    if (o.kind !== "figma_verified") {
+      continue;
+    }
+    const fk = typeof o.fileKey === "string" ? o.fileKey.trim() : "";
+    if (fk === k) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function createGapDetectorNode(client: DatabaseClient): PipelineNode {
   return createPipelineNode("gapDetector", async (state) => {
     const brief = readBriefFromState(state);
-    const figmaKey = resolveFigmaFileKeyForPipeline(state, brief);
+    const priorJson = state.stateJson as Record<string, unknown>;
+    const figmaKey = await resolveFigmaFileKeyFromProject(client, state.projectId);
+    const priorFigma = readPriorFigmaVerification(priorJson, figmaKey);
     let figmaLinkVerified = false;
     let figmaVerificationError: string | undefined;
     if (figmaKey) {
-      console.log("[figma] gapDetector: verifying design accessible", { fileKey: figmaKey });
-      try {
-        const verification = await verifyFigmaDesignAccessible(figmaKey);
-        figmaLinkVerified = verification.ok;
-        figmaVerificationError = verification.error;
-        console.log("[figma] gapDetector: verification result", { ok: figmaLinkVerified, error: figmaVerificationError });
-      } catch (error) {
-        figmaVerificationError = error instanceof Error ? error.message : String(error);
-        figmaLinkVerified = false;
-        console.log("[figma] gapDetector: verification threw", { error: figmaVerificationError });
+      if (priorFigma.verified) {
+        figmaLinkVerified = true;
+        console.log("[figma] gapDetector: skipping Figma API verify (same file key already verified in session)", {
+          fileKey: figmaKey
+        });
+      } else {
+        console.log("[figma] gapDetector: verifying design accessible", { fileKey: figmaKey });
+        try {
+          const verification = await verifyFigmaDesignAccessible(figmaKey);
+          figmaLinkVerified = verification.ok;
+          figmaVerificationError = verification.error;
+          if (
+            !figmaLinkVerified &&
+            isFigmaRateLimitError(figmaVerificationError) &&
+            timelineHadFigmaVerifiedForKey(priorJson, figmaKey)
+          ) {
+            figmaLinkVerified = true;
+            figmaVerificationError = undefined;
+            console.log("[figma] gapDetector: 429 but session timeline has figma_verified; keeping design-truth", {
+              fileKey: figmaKey
+            });
+          } else {
+            console.log("[figma] gapDetector: verification result", { ok: figmaLinkVerified, error: figmaVerificationError });
+          }
+        } catch (error) {
+          figmaVerificationError = error instanceof Error ? error.message : String(error);
+          figmaLinkVerified = false;
+          console.log("[figma] gapDetector: verification threw", { error: figmaVerificationError });
+        }
       }
     }
     let gapAnalysis: z.infer<typeof GapDetectionOutputSchema>;
@@ -413,7 +615,7 @@ export function createGapDetectorNode(client: DatabaseClient): PipelineNode {
       const gapAnalysisOutput = await model.invoke([
         "You are GapDetector.",
         "Check the Brief for missing info.",
-        "IMPORTANT: If sourceLinks has any figma.com URL, do NOT output a gap about missing Figma/design specifications.",
+        "IMPORTANT: If this project has a stored Figma design URL (see Figma validation section: a resolved file key means one is configured), do NOT output a gap about missing Figma/design specifications.",
         "If Figma validation above is SUCCESS, do NOT output gaps for Missing Design Specifications or Brand Guidelines.",
         "",
         figmaValidationSection,
@@ -423,7 +625,10 @@ export function createGapDetectorNode(client: DatabaseClient): PipelineNode {
       gapAnalysis = ensureConstitutionGapCoverage(brief, GapDetectionOutputSchema.parse(gapAnalysisOutput), {
         figmaDesignTruthAvailable: figmaLinkVerified
       });
-      gapAnalysis = removeInvalidMissingFigmaGap(gapAnalysis, hasProvidedFigmaDesign(state, brief));
+      gapAnalysis = removeInvalidMissingFigmaGap(
+        gapAnalysis,
+        await projectHasStoredFigmaSource(client, state.projectId)
+      );
       gapAnalysis = applyFigmaDesignTruthToGaps(gapAnalysis, figmaLinkVerified);
     } catch (error) {
       console.warn(`[gapDetector] Falling back to deterministic gap analysis: ${String(error)}`);
@@ -435,11 +640,12 @@ export function createGapDetectorNode(client: DatabaseClient): PipelineNode {
         },
         { figmaDesignTruthAvailable: figmaLinkVerified }
       );
-      gapAnalysis = removeInvalidMissingFigmaGap(gapAnalysis, hasProvidedFigmaDesign(state, brief));
+      gapAnalysis = removeInvalidMissingFigmaGap(
+        gapAnalysis,
+        await projectHasStoredFigmaSource(client, state.projectId)
+      );
       gapAnalysis = applyFigmaDesignTruthToGaps(gapAnalysis, figmaLinkVerified);
     }
-    console.log("[gapDetector] figmaKey:", figmaKey);
-    console.log("[gapDetector] figmaLinkVerified:", figmaLinkVerified);
     await syncPipelineEntity(client, {
       kind: "clarifications",
       sessionId: state.sessionId,
@@ -449,7 +655,17 @@ export function createGapDetectorNode(client: DatabaseClient): PipelineNode {
     const stateJson = state.stateJson as Record<string, unknown>;
     const redraftRequested = stateJson.redraftRequested === true;
     const hasHighPriorityGaps = gapAnalysis.gaps.some((gap) => gap.priority === "High");
-    const needsClarification = hasHighPriorityGaps || redraftRequested;
+    let needsClarification = hasHighPriorityGaps || redraftRequested;
+    const skipClarificationGate =
+      process.env.VIBE_TEST_PIPELINE_SKIP_CLARIFICATION === "1" ||
+      process.env.VIBE_TEST_PIPELINE_SKIP_CLARIFICATION === "true";
+    const bypassApplied = skipClarificationGate && hasHighPriorityGaps && !redraftRequested;
+    if (bypassApplied) {
+      console.warn(
+        "[gapDetector] VIBE_TEST_PIPELINE_SKIP_CLARIFICATION: proceeding to PRD despite High gaps (local/test only). Gaps are still stored in state."
+      );
+      needsClarification = false;
+    }
     const nextStateJson: Record<string, unknown> = { ...state.stateJson };
     if (redraftRequested) {
       delete nextStateJson.redraftRequested;
@@ -469,11 +685,13 @@ export function createGapDetectorNode(client: DatabaseClient): PipelineNode {
       delete nextStateJson.cursorRules;
       delete nextStateJson.route;
     }
-    if (
-      figmaKey &&
-      (typeof nextStateJson.figmaFileKey !== "string" || String(nextStateJson.figmaFileKey).trim().length === 0)
-    ) {
+    if (figmaKey) {
       nextStateJson.figmaFileKey = figmaKey;
+    } else {
+      delete nextStateJson.figmaFileKey;
+    }
+    if (figmaLinkVerified) {
+      delete nextStateJson.figmaVerificationError;
     }
     let withTimestamps: Record<string, unknown> = nextStateJson;
     if (figmaKey) {
@@ -508,7 +726,43 @@ export function createApplyClarificationNode(client: DatabaseClient): PipelineNo
       throw new Error("applyClarification requires a non-empty stateJson.clarificationFollowUp string.");
     }
     const brief = readBriefFromState(state);
-    const mergedBrief = { ...brief, summary: `${brief.summary}\n\nUser clarification:\n${text}` };
+    let mergedBrief: z.infer<typeof BriefSchema>;
+    try {
+      const model = getAnthropicIntelligenceModel().withStructuredOutput(BriefSchema);
+      const mergedOutput = await model.invoke(
+        [
+          "You are BriefClarificationMerger.",
+          "Merge the user's latest clarification into the structured brief. Return a complete brief that satisfies the schema.",
+          "",
+          "Rules:",
+          "- Preserve existing correct content (name, goal, sourceLinks, clientName, deadline, businessGoal) unless the clarification explicitly overrides.",
+          "- `problem`, `targetAudience`, `businessValue`, `keyUserScenarios`, and `mvpFocus` MUST be JSON arrays of strings (one bullet per element). Never use a single string for those keys.",
+          "- Append the raw clarification to `summary` under a heading 'User clarifications' if that exact text is not already in the summary.",
+          "- Populate `businessValue` with KPIs, revenue targets, acquisition metrics, ROAS, CAC, conversion, AOV, etc. when the clarification mentions them. Merge with existing bullets; do not drop prior items unless contradicted.",
+          "- Populate `keyUserScenarios` with named user journeys / personas / flows. Merge with existing.",
+          "- Populate `mvpFocus` with phased scope, must-haves, integrations, digital vs physical, poster sizes, etc. Merge with existing.",
+          "- If `problem` is empty or only echoes the goal, derive a concrete problem statement from the brief + clarification; otherwise merge new facets.",
+          "- Put security, GDPR, retention, DR, backups, monitoring, testing strategy, and third-party integration constraints into `constraints` (append paragraphs or bullet-style lines).",
+          "- Replace placeholder-only arrays (e.g. a single 'TBD') when the clarification supplies real content.",
+          "- Do not invent URLs, client names, or legal claims not implied by the inputs.",
+          "",
+          "Current brief JSON:",
+          JSON.stringify(brief, null, 2),
+          "",
+          "User clarification:",
+          text
+        ].join("\n")
+      );
+      mergedBrief = BriefSchema.parse(mergedOutput);
+      mergedBrief = normalizePrimaryFigmaSourceLink(mergedBrief, `${brief.summary}\n${text}`, brief.sourceLinks);
+    } catch (error) {
+      console.warn(`[applyClarification] Structured merge failed; appending to summary only: ${String(error)}`);
+      mergedBrief = normalizePrimaryFigmaSourceLink(
+        { ...brief, summary: `${brief.summary}\n\nUser clarification:\n${text}` },
+        `${brief.summary}\n${text}`,
+        brief.sourceLinks
+      );
+    }
     const persisted = await persistBriefArtifact(client, state, mergedBrief);
     const nextStateJson: Record<string, unknown> = { ...stateJson };
     delete nextStateJson.clarificationFollowUp;

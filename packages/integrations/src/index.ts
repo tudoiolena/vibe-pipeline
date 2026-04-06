@@ -13,6 +13,7 @@ export {
 export {
   createFigmaClient,
   extractFigmaFileKeyFromUrl,
+  normalizeFigmaSourceUrlForProject,
   figmaRgbToHex,
   getFigmaFileMetadata,
   mapFigmaFileToDesignMap,

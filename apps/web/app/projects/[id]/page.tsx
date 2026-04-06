@@ -4,12 +4,12 @@ import type { ReactNode } from "react";
 import type { PersistedCheckpointEnvelope } from "@vibe/ai/graph";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { HandoffExportCard } from "@/features/handoff-export";
 import { GapViewer } from "@/features/gap-viewer";
 import { IntakeForm } from "@/features/intake-form";
 import { PrdReadMode } from "@/features/prd-read-mode";
 import { SessionProgressWithHistory } from "@/features/session-history";
 import { getPipelineStageLabel, type ProjectSessionStage } from "@/lib/pipeline-stage-labels";
-import { parseProjectSpecFiles, type ProjectSpecFile } from "@/lib/project-spec-files";
 import { getSessionStepperActiveIndex } from "@/lib/session-progress";
 import {
   createClient,
@@ -17,8 +17,15 @@ import {
   getLatestProjectSessionByProjectId,
   getProjectById
 } from "@vibe/database";
-import { resolveDesignMapFromSession, resolveTaskTreeForSession } from "@/lib/pipeline-export-state";
-import { BriefSchema, PRDSchema, UIKitSchema, type PRD, type TaskTree, type UIKit } from "@vibe/schema";
+import {
+  type CursorRuleFile,
+  resolveBriefForSession,
+  resolveCursorRulesForSession,
+  resolveDesignMapForSession,
+  resolveTaskTreeForSession,
+  resolveUIKitForSession
+} from "@/lib/pipeline-export-state";
+import { BriefSchema, PRDSchema, type Brief, type DesignMap, type PRD, type TaskTree, type UIKit } from "@vibe/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -35,17 +42,6 @@ function parseEnvelope(stateJson: unknown): PersistedCheckpointEnvelope | null {
     return null;
   }
   return candidate as PersistedCheckpointEnvelope;
-}
-
-function parsePrdFromSessionState(stateJson: unknown): PRD | null {
-  const envelope = parseEnvelope(stateJson);
-  const raw = envelope?.pipelineState.stateJson;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return null;
-  }
-  const prd = (raw as Record<string, unknown>).prd;
-  const parsed = PRDSchema.safeParse(prd);
-  return parsed.success ? parsed.data : null;
 }
 
 function parseWorkflowStatusFromSessionState(stateJson: unknown): string | null {
@@ -70,67 +66,6 @@ function isPrdNodeComplete(workflowStatus: string | null): boolean {
     workflowStatus === "handoff_prepared" ||
     workflowStatus === "completed"
   );
-}
-
-type CursorRuleFile = {
-  filename: string;
-  content: string;
-};
-
-function parseSpecFilesFromSessionState(stateJson: unknown): ProjectSpecFile[] {
-  const envelope = parseEnvelope(stateJson);
-  const raw = envelope?.pipelineState.stateJson;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return [];
-  }
-  return parseProjectSpecFiles((raw as Record<string, unknown>).specFiles);
-}
-
-function parseCursorRulesFromSessionState(stateJson: unknown): CursorRuleFile[] {
-  const envelope = parseEnvelope(stateJson);
-  const raw = envelope?.pipelineState.stateJson;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return [];
-  }
-  const cursorRules = (raw as Record<string, unknown>).cursorRules;
-  if (Array.isArray(cursorRules)) {
-    const out: CursorRuleFile[] = [];
-    for (const rule of cursorRules) {
-      if (!rule || typeof rule !== "object" || Array.isArray(rule)) {
-        continue;
-      }
-      const entry = rule as Record<string, unknown>;
-      const filename =
-        typeof entry.filename === "string"
-          ? entry.filename
-          : typeof entry.path === "string"
-            ? entry.path
-            : typeof entry.filePath === "string"
-              ? entry.filePath
-              : null;
-      const content = typeof entry.content === "string" ? entry.content : null;
-      if (filename && content) {
-        out.push({ filename, content });
-      }
-    }
-    return out;
-  }
-  if (cursorRules && typeof cursorRules === "object" && !Array.isArray(cursorRules)) {
-    return Object.entries(cursorRules)
-      .filter((entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string")
-      .map(([filename, content]) => ({ filename, content }));
-  }
-  return [];
-}
-
-function parseUIKitFromSessionState(stateJson: unknown): UIKit | null {
-  const envelope = parseEnvelope(stateJson);
-  const raw = envelope?.pipelineState.stateJson;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return null;
-  }
-  const parsed = UIKitSchema.safeParse((raw as Record<string, unknown>).uiKit);
-  return parsed.success ? parsed.data : null;
 }
 
 /** Maps each session stage to the primary UI block for this page. Stages not listed have no main panel. */
@@ -160,12 +95,6 @@ function getIntakeEditorInitialText(project: { description: string | null }, sta
   const briefParsed = BriefSchema.safeParse(rec.brief);
   if (briefParsed.success) {
     return briefParsed.data.summary;
-  }
-  for (const key of ["rawIntakeText", "intakeText", "rawBrief", "inputText"] as const) {
-    const v = rec[key];
-    if (typeof v === "string" && v.trim().length > 0) {
-      return v.trim();
-    }
   }
   return "";
 }
@@ -203,15 +132,21 @@ function renderSessionStageContent(options: {
   stage: ProjectSessionStage;
   sessionId: string;
   projectId: string;
-  project: { description: string | null };
+  project: { description: string | null; source_figma_url: string | null };
   stateJson: unknown;
   prdForRead: PRD | null;
+  prdLoadError: string | null;
   prdNodeComplete: boolean;
   taskTreeForExport: TaskTree | null;
-  designMapForRead: ReturnType<typeof resolveDesignMapFromSession>;
+  taskTreeLoadError: string | null;
+  designMapForRead: DesignMap | undefined;
+  designMapLoadError: string | null;
   cursorRulesForRead: CursorRuleFile[];
-  specFilesForRead: ProjectSpecFile[];
+  cursorRulesLoadError: string | null;
   uiKitForRead: UIKit | null;
+  uiKitLoadError: string | null;
+  briefForRead: Brief | null;
+  briefLoadError: string | null;
   linearTeamDisplay: string;
   defaultLinearTeamId: string | undefined;
 }): ReactNode {
@@ -222,7 +157,9 @@ function renderSessionStageContent(options: {
         projectId={options.projectId}
         pipelineSessionId={options.sessionId}
         initialIntakeText={getIntakeEditorInitialText(options.project, options.stateJson)}
-        initialFigmaUrl={getInitialFigmaUrlFromState(options.stateJson)}
+        initialFigmaUrl={
+          options.project.source_figma_url?.trim() || getInitialFigmaUrlFromState(options.stateJson)
+        }
       />
     );
   }
@@ -230,29 +167,74 @@ function renderSessionStageContent(options: {
     return <GapViewer sessionId={options.sessionId} />;
   }
   if (feature === "prd") {
-    return options.prdForRead ? (
-      <PrdReadMode
-        prd={options.prdForRead}
-        prdNodeComplete={options.prdNodeComplete}
-        sessionId={options.sessionId}
-        projectId={options.projectId}
-        taskTree={options.taskTreeForExport}
-        designMap={options.designMapForRead}
-        cursorRules={options.cursorRulesForRead}
-        specFiles={options.specFilesForRead}
-        uiKit={options.uiKitForRead ?? undefined}
-        linearTeamDisplay={options.linearTeamDisplay}
-        defaultLinearTeamId={options.defaultLinearTeamId}
-      />
-    ) : (
-      <Card>
-        <CardHeader>
-          <CardTitle>Product requirements</CardTitle>
-          <CardDescription>
-            This session is in the PRD stage, but no structured PRD was found on the latest artifact or checkpoint.
-          </CardDescription>
-        </CardHeader>
-      </Card>
+    return (
+      <>
+        {options.taskTreeLoadError ? (
+          <Card className="border-red-300 dark:border-red-500/50">
+            <CardHeader>
+              <CardTitle className="text-base text-red-800 dark:text-red-200">Task tree could not be loaded</CardTitle>
+              <CardDescription className="text-red-700 dark:text-red-300">{options.taskTreeLoadError}</CardDescription>
+            </CardHeader>
+          </Card>
+        ) : null}
+        {options.designMapLoadError || options.uiKitLoadError ? (
+          <Card className="border-red-300 dark:border-red-500/50">
+            <CardHeader>
+              <CardTitle className="text-base text-red-800 dark:text-red-200">Design / UI kit</CardTitle>
+              <CardDescription className="space-y-1 text-red-700 dark:text-red-300">
+                {options.designMapLoadError ? <p>Design map: {options.designMapLoadError}</p> : null}
+                {options.uiKitLoadError ? <p>UI kit: {options.uiKitLoadError}</p> : null}
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        ) : null}
+        {options.briefLoadError || (options.prdForRead != null && options.briefForRead == null) ? (
+          <Card className="border-amber-300 dark:border-amber-500/50">
+            <CardHeader>
+              <CardTitle className="text-base text-amber-900 dark:text-amber-100">Brief</CardTitle>
+              <CardDescription className="text-amber-800 dark:text-amber-200">
+                {options.briefLoadError ?? "No brief artifact."}
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        ) : null}
+        {options.cursorRulesLoadError ? (
+          <Card className="border-red-300 dark:border-red-500/50">
+            <CardHeader>
+              <CardTitle className="text-base text-red-800 dark:text-red-200">Cursor rules artifact</CardTitle>
+              <CardDescription className="text-red-700 dark:text-red-300">{options.cursorRulesLoadError}</CardDescription>
+            </CardHeader>
+          </Card>
+        ) : null}
+        {options.prdForRead ? (
+          <PrdReadMode
+            prd={options.prdForRead}
+            prdNodeComplete={options.prdNodeComplete}
+            sessionId={options.sessionId}
+            projectId={options.projectId}
+            taskTree={options.taskTreeForExport}
+            designMap={options.designMapForRead}
+            cursorRules={options.cursorRulesForRead}
+            uiKit={options.uiKitForRead ?? undefined}
+            brief={options.briefForRead}
+            linearTeamDisplay={options.linearTeamDisplay}
+            defaultLinearTeamId={options.defaultLinearTeamId}
+          />
+        ) : (
+          <Card className={options.prdLoadError ? "border-red-300 dark:border-red-500/50" : undefined}>
+            <CardHeader>
+              <CardTitle>Product requirements</CardTitle>
+              <CardDescription
+                className={
+                  options.prdLoadError ? "text-red-700 dark:text-red-300" : undefined
+                }
+              >
+                {options.prdLoadError ?? "No valid PRD artifact."}
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        )}
+      </>
     );
   }
   return null;
@@ -274,33 +256,50 @@ export default async function ProjectSessionPage({ params }: ProjectPageProps) {
 
   let prdForRead: PRD | null = null;
   let prdLoadedFromArtifact = false;
+  let prdLoadError: string | null = null;
   const workflowStatus = session && !sessionError ? parseWorkflowStatusFromSessionState(session.state_json) : null;
   if (session && !sessionError && isReadModeStage(session.current_stage)) {
-    const { data: prdArtifact } = await getLatestArtifactVersion(client, projectId, "prd");
-    if (prdArtifact?.content_json) {
+    const { data: prdArtifact, error: prdArtifactError } = await getLatestArtifactVersion(client, projectId, "prd");
+    if (prdArtifactError) {
+      prdLoadError = `Failed to load PRD artifact: ${prdArtifactError.message}`;
+    } else if (prdArtifact?.content_json) {
       const parsed = PRDSchema.safeParse(prdArtifact.content_json);
       if (parsed.success) {
         prdForRead = parsed.data;
         prdLoadedFromArtifact = true;
+      } else {
+        prdLoadError = `Latest PRD artifact failed validation: ${parsed.error.message}`;
       }
-    }
-    if (!prdForRead) {
-      prdForRead = parsePrdFromSessionState(session.state_json);
     }
   }
   const prdNodeComplete = isPrdNodeComplete(workflowStatus) || prdLoadedFromArtifact;
 
   let taskTreeForExport: TaskTree | null = null;
-  let designMapForRead: ReturnType<typeof resolveDesignMapFromSession> = undefined;
+  let taskTreeLoadError: string | null = null;
+  let designMapForRead: DesignMap | undefined;
+  let designMapLoadError: string | null = null;
   let cursorRulesForRead: CursorRuleFile[] = [];
-  let specFilesForRead: ProjectSpecFile[] = [];
+  let cursorRulesLoadError: string | null = null;
   let uiKitForRead: UIKit | null = null;
+  let uiKitLoadError: string | null = null;
+  let briefForRead: Brief | null = null;
+  let briefLoadError: string | null = null;
   if (session && !sessionError && isReadModeStage(session.current_stage)) {
-    taskTreeForExport = await resolveTaskTreeForSession(client, projectId, session.state_json);
-    designMapForRead = resolveDesignMapFromSession(session.state_json);
-    cursorRulesForRead = parseCursorRulesFromSessionState(session.state_json);
-    specFilesForRead = parseSpecFilesFromSessionState(session.state_json);
-    uiKitForRead = parseUIKitFromSessionState(session.state_json);
+    const resolvedTasks = await resolveTaskTreeForSession(client, projectId);
+    taskTreeForExport = resolvedTasks.taskTree;
+    taskTreeLoadError = resolvedTasks.loadError;
+    const resolvedDesign = await resolveDesignMapForSession(client, projectId);
+    designMapForRead = resolvedDesign.designMap;
+    designMapLoadError = resolvedDesign.loadError;
+    const resolvedUi = await resolveUIKitForSession(client, projectId);
+    uiKitForRead = resolvedUi.uiKit;
+    uiKitLoadError = resolvedUi.loadError;
+    const resolvedCr = await resolveCursorRulesForSession(client, projectId);
+    cursorRulesForRead = resolvedCr.cursorRules;
+    cursorRulesLoadError = resolvedCr.loadError;
+    const resolvedBrief = await resolveBriefForSession(client, projectId);
+    briefForRead = resolvedBrief.brief;
+    briefLoadError = resolvedBrief.loadError;
   }
 
   const linearTeamDisplay = linearTeamDisplayFromEnv();
@@ -345,6 +344,16 @@ export default async function ProjectSessionPage({ params }: ProjectPageProps) {
         </CardContent>
       </Card>
 
+      <HandoffExportCard
+        projectId={projectId}
+        specPackLikelyReady={Boolean(prdForRead)}
+        cursorRulesLikelyReady={cursorRulesForRead.length > 0}
+        prdHint={prdLoadError}
+        taskHint={taskTreeLoadError}
+        cursorRulesHint={cursorRulesLoadError}
+        briefHint={briefLoadError}
+      />
+
       {session && !sessionError ? (
         <SessionProgressWithHistory
           sessionId={session.id}
@@ -358,12 +367,18 @@ export default async function ProjectSessionPage({ params }: ProjectPageProps) {
             project,
             stateJson: session.state_json,
             prdForRead,
+            prdLoadError,
             prdNodeComplete,
             taskTreeForExport,
+            taskTreeLoadError,
             designMapForRead,
+            designMapLoadError,
             cursorRulesForRead,
-            specFilesForRead,
+            cursorRulesLoadError,
             uiKitForRead,
+            uiKitLoadError,
+            briefForRead,
+            briefLoadError,
             linearTeamDisplay,
             defaultLinearTeamId
           })}

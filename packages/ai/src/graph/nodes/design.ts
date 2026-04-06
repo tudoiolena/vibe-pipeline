@@ -5,7 +5,12 @@ import type { DatabaseClient } from "@vibe/database";
 import { getAnthropicIntelligenceModel } from "../../llm/anthropic";
 import { createPipelineNode, type PipelineNode } from "./types";
 import { DesignAnalysisOutputSchema } from "./intake";
-import { syncDesignTaskLinks, syncPipelineEntity } from "./shared/persistence";
+import {
+  persistDesignMapArtifact,
+  persistUIKitArtifact,
+  syncDesignTaskLinks,
+  syncPipelineEntity
+} from "./shared/persistence";
 import {
   buildConstitutionFallbackUIKit,
   deriveUIKitFromFigmaMetadata,
@@ -32,12 +37,16 @@ export function createDesignAnalysisNode(client: DatabaseClient): PipelineNode {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.log("[figma] designAnalysis: metadata resolution failed", { message });
+      const emptyMap = DesignMapSchema.parse({ nodes: [], links: [] });
+      const fallbackKit = buildConstitutionFallbackUIKit();
+      await persistDesignMapArtifact(client, state, emptyMap);
+      await persistUIKitArtifact(client, state, fallbackKit);
       return {
         currentStage: "design_sync",
         stateJson: {
           ...state.stateJson,
-          designMap: DesignMapSchema.parse({ nodes: [], links: [] }),
-          uiKit: buildConstitutionFallbackUIKit(),
+          designMap: emptyMap,
+          uiKit: fallbackKit,
           designAnalysisError: message,
           workflowStatus: "design_analysis_failed"
         }
@@ -83,11 +92,14 @@ export function createDesignAnalysisNode(client: DatabaseClient): PipelineNode {
       uiKit
     });
     await syncDesignTaskLinks(client, state.sessionId, filteredLinks);
+    const finalDesignMap = DesignMapSchema.parse({ nodes: baseMap.nodes, links: filteredLinks });
+    await persistDesignMapArtifact(client, state, finalDesignMap);
+    await persistUIKitArtifact(client, state, uiKit);
     return {
       currentStage: "design_sync",
       stateJson: {
         ...state.stateJson,
-        designMap: DesignMapSchema.parse({ nodes: baseMap.nodes, links: filteredLinks }),
+        designMap: finalDesignMap,
         uiKit,
         designAnalysisRationale: analysis.rationale,
         designTokenization: analysis.tokenization,

@@ -31,16 +31,44 @@ export const SourceLinkSchema = z.object({
   type: z.string().min(1).optional()
 });
 
+/**
+ * Structured LLM output often uses a single string for list-shaped brief fields.
+ * Accept string (and split on newlines) or array; empty / whitespace → [].
+ */
+function briefStringListPreprocess(raw: unknown): unknown {
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+  if (typeof raw === "string") {
+    const lines = raw
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    return lines.length > 0 ? lines : [];
+  }
+  return raw;
+}
+
+const BriefStringListSchema = z.preprocess(briefStringListPreprocess, z.array(z.string().min(1)).default([]));
+
 export const BriefSchema = z.object({
   name: z.string().min(1),
   summary: z.string().min(1),
-  problem: z.array(z.string().min(1)).default([]),
+  problem: BriefStringListSchema,
   goal: z.string().min(1),
-  targetAudience: z.array(z.string().min(1)).default([]),
-  businessValue: z.array(z.string().min(1)).default([]),
-  keyUserScenarios: z.array(z.string().min(1)).default([]),
-  mvpFocus: z.array(z.string().min(1)).default([]),
-  sourceLinks: z.array(SourceLinkSchema).default([])
+  targetAudience: BriefStringListSchema,
+  businessValue: BriefStringListSchema,
+  keyUserScenarios: BriefStringListSchema,
+  mvpFocus: BriefStringListSchema,
+  sourceLinks: z.array(SourceLinkSchema).default([]),
+  /** Structured intake: client / stakeholder name (optional for legacy briefs). */
+  clientName: z.string().min(1).optional(),
+  /** Free-text constraints from intake (budget, compliance, stack, etc.). */
+  constraints: z.string().min(1).optional(),
+  /** Target delivery date from intake (prefer YYYY-MM-DD). */
+  deadline: z.string().min(1).optional(),
+  /** Business goal as captured on intake; `goal` remains the primary product goal string. */
+  businessGoal: z.string().min(1).optional()
 });
 
 export const UserStorySchema = z.object({

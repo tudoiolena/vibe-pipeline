@@ -2,11 +2,7 @@ import { createClient, getProjectSessionById, updateProjectSessionById } from "@
 import { exportTasksToLinear, requireLinearDefaultTeamId } from "@vibe/integrations";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import {
-  flattenTaskTree,
-  resolveDesignMapFromSession,
-  resolveTaskTreeForSession
-} from "@/lib/pipeline-export-state";
+import { flattenTaskTree, resolveDesignMapForSession, resolveTaskTreeForSession } from "@/lib/pipeline-export-state";
 
 const ExportLinearBodySchema = z.object({
   sessionId: z.string().uuid(),
@@ -48,10 +44,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Session not found." }, { status: 404 });
   }
 
-  const taskTree = await resolveTaskTreeForSession(client, session.project_id, session.state_json);
+  const { taskTree, loadError } = await resolveTaskTreeForSession(client, session.project_id);
+  if (loadError) {
+    console.error("[export/linear] task tree load failed:", loadError);
+    return NextResponse.json({ error: loadError }, { status: 500 });
+  }
   if (!taskTree || taskTree.epics.length === 0) {
     return NextResponse.json(
-      { error: "No task tree found for this session. Generate or attach tasks first." },
+      { error: "No task tree found for this session. Generate tasks or save a tasks artifact first." },
       { status: 400 }
     );
   }
@@ -71,7 +71,10 @@ export async function POST(request: Request) {
     children: [...task.children]
   }));
 
-  const designMap = resolveDesignMapFromSession(session.state_json);
+  const { designMap, loadError: designMapLoadError } = await resolveDesignMapForSession(client, session.project_id);
+  if (designMapLoadError) {
+    console.error("[export/linear] design map load:", designMapLoadError);
+  }
 
   try {
     const { issues } = await exportTasksToLinear(tasksForExport, teamId, { designMap });
