@@ -367,11 +367,11 @@ function IntakeFormInner({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{isProjectRevision ? "Revise your brief" : "New Intake"}</CardTitle>
+        <CardTitle>{isProjectRevision ? "Revise your brief" : "Start a new pipeline"}</CardTitle>
         <CardDescription>
           {isProjectRevision
             ? "Update your vibe and re-run normalization and gap analysis for this session."
-            : "Capture the client brief and context to start a pipeline session."}
+            : "Paste or structure the brief. We will normalize it and kick off the next stages when you submit."}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -525,7 +525,7 @@ function IntakeFormInner({
               className="min-h-[80px] font-mono text-xs"
             />
           </div>
-          <Button type="submit" disabled={isSubmitting}>
+          <Button type="submit" size="lg" disabled={isSubmitting}>
             {isSubmitting
               ? isProjectRevision
                 ? "Restarting analysis…"
@@ -554,7 +554,7 @@ function IntakeFormFallback() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Intake</CardTitle>
+        <CardTitle>Start a new pipeline</CardTitle>
         <CardDescription>Loading form…</CardDescription>
       </CardHeader>
       <CardContent>
