@@ -1,17 +1,19 @@
 import Link from "next/link";
+import { ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getProjects } from "../model/get-projects";
+import { isDisplayableHttpUrl } from "@/lib/repo-display-url";
+import type { ProjectListResult } from "../model/get-projects";
 import { ProjectArchiveButton } from "./project-archive-button";
 
-export async function ProjectList() {
-  const { projects, errorMessage } = await getProjects();
-
+export function ProjectList({ projects, errorMessage }: ProjectListResult) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Projects</CardTitle>
-        <CardDescription>Recent projects from the database.</CardDescription>
+        <CardTitle>Your projects</CardTitle>
+        <CardDescription>
+          Open a project to continue the pipeline, or start another intake beside this list.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {errorMessage ? (
@@ -20,19 +22,35 @@ export async function ProjectList() {
           </p>
         ) : null}
         {projects.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No projects yet. Submit a vibe to create your first one.</p>
+          <p className="text-sm text-muted-foreground">
+            No projects yet. Add a brief on the left to create your first pipeline session.
+          </p>
         ) : (
           <ul className="space-y-2">
             {projects.map((project) => (
               <li key={project.id} className="rounded-lg border border-border p-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <Link
-                    href={`/projects/${project.id}`}
-                    className="font-medium text-foreground underline-offset-4 hover:underline"
-                  >
-                    {project.name}
-                  </Link>
-                  <div className="flex items-center gap-1">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-3">
+                    <Link
+                      href={`/projects/${project.id}`}
+                      className="font-medium text-foreground underline-offset-4 hover:underline"
+                    >
+                      {project.name}
+                    </Link>
+                    {isDisplayableHttpUrl(project.source_repo_url) ? (
+                      <a
+                        href={project.source_repo_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                        aria-label={`Open repository for ${project.name}`}
+                      >
+                        <ExternalLink className="size-3.5 shrink-0" aria-hidden />
+                        Repo
+                      </a>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
                     <Badge variant="secondary">{project.status}</Badge>
                     <ProjectArchiveButton projectId={project.id} projectName={project.name} />
                   </div>
