@@ -5,6 +5,7 @@ import type { PersistedCheckpointEnvelope } from "@vibe/ai/graph";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { HandoffExportCard } from "@/features/handoff-export";
+import { isGithubOAuthConfigured } from "@/lib/github-env";
 import { GapViewer } from "@/features/gap-viewer";
 import { IntakeForm } from "@/features/intake-form";
 import { PrdReadMode } from "@/features/prd-read-mode";
@@ -31,7 +32,34 @@ export const dynamic = "force-dynamic";
 
 type ProjectPageProps = {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
+
+function firstSearchParam(v: string | string[] | undefined): string | undefined {
+  if (Array.isArray(v)) {
+    return v[0];
+  }
+  return v;
+}
+
+function githubExportBannerFromSearchParams(
+  sp: Record<string, string | string[] | undefined>
+): { kind: "success"; repo: string; url: string } | { kind: "error"; message: string } | null {
+  const status = firstSearchParam(sp.github_export);
+  if (status === "success") {
+    const repo = firstSearchParam(sp.github_repo)?.trim();
+    const url = firstSearchParam(sp.github_url)?.trim();
+    if (repo && url) {
+      return { kind: "success", repo, url };
+    }
+    return { kind: "error", message: "GitHub export succeeded but response was incomplete. Check your GitHub account for a new repository." };
+  }
+  if (status === "error") {
+    const reason = firstSearchParam(sp.github_reason)?.trim() || "Unknown error.";
+    return { kind: "error", message: reason };
+  }
+  return null;
+}
 
 function parseEnvelope(stateJson: unknown): PersistedCheckpointEnvelope | null {
   if (!stateJson || typeof stateJson !== "object" || Array.isArray(stateJson)) {
@@ -240,8 +268,10 @@ function renderSessionStageContent(options: {
   return null;
 }
 
-export default async function ProjectSessionPage({ params }: ProjectPageProps) {
+export default async function ProjectSessionPage({ params, searchParams }: ProjectPageProps) {
   const { id: projectId } = await params;
+  const sp = (await searchParams) ?? {};
+  const githubExportBanner = githubExportBannerFromSearchParams(sp);
   const client = createClient();
 
   const { data: project, error: projectError } = await getProjectById(client, projectId);
@@ -352,6 +382,8 @@ export default async function ProjectSessionPage({ params }: ProjectPageProps) {
         taskHint={taskTreeLoadError}
         cursorRulesHint={cursorRulesLoadError}
         briefHint={briefLoadError}
+        githubOAuthConfigured={isGithubOAuthConfigured()}
+        githubExportBanner={githubExportBanner}
       />
 
       {session && !sessionError ? (

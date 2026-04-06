@@ -1,6 +1,7 @@
 import { createClient } from "@vibe/database";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { buildFullHandoffFileMapFromData } from "@/lib/full-handoff-file-map";
 import { buildProjectSpecPack, withCursorHandoffDoc } from "@/lib/project-spec-files";
 import { cursorRuleZipPath, loadProjectHandoffData } from "@/lib/project-handoff-data";
 import { specPackToZipEntries, zipRecord } from "@/lib/handoff-zip";
@@ -139,43 +140,14 @@ export async function GET(request: Request, context: RouteContext) {
     }
 
     // full-handoff-zip
-    if (!data.prd) {
-      const msg = data.prdLoadError ?? "No valid PRD artifact.";
+    const fullMap = buildFullHandoffFileMapFromData(data);
+    if (!fullMap.ok) {
+      const msg = fullMap.error;
       console.error("[GET export/handoff] full-handoff-zip blocked:", msg);
-      return NextResponse.json({ error: msg }, { status: 400 });
+      return NextResponse.json({ error: msg }, { status: fullMap.status });
     }
 
-    const specFiles = withCursorHandoffDoc(
-      buildProjectSpecPack({
-        prd: data.prd,
-        uiKit: data.uiKit ?? undefined,
-        brief: data.brief ?? undefined,
-        designMap: data.designMap,
-        taskTree: data.taskTree ?? undefined
-      })
-    );
-    const merged: Record<string, string> = { ...specPackToZipEntries(specFiles) };
-
-    merged["artifacts/prd.json"] = JSON.stringify(data.rawPrdFromDb ?? data.prd, null, 2);
-    if (data.rawTasksFromDb != null) {
-      merged["artifacts/tasks.json"] = JSON.stringify(data.rawTasksFromDb, null, 2);
-    } else {
-      merged["artifacts/TASKS_README.txt"] =
-        data.taskTreeLoadError != null ? `${data.taskTreeLoadError}\n` : "No tasks artifact.\n";
-    }
-
-    if (data.cursorRules.length > 0) {
-      for (const rule of data.cursorRules) {
-        merged[cursorRuleZipPath(rule.filename)] = rule.content;
-      }
-    } else {
-      merged[".cursor/rules/README.txt"] =
-        data.cursorRulesLoadError != null
-          ? `${data.cursorRulesLoadError}\n`
-          : "No cursor_rules artifact.\n";
-    }
-
-    const zipped = zipRecord(merged);
+    const zipped = zipRecord(fullMap.files);
     return zipResponse(zipped, `project-${projectId.slice(0, 8)}-full-handoff.zip`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -1,9 +1,13 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Download, FileJson, FolderArchive } from "lucide-react";
+import { Download, FileJson, FolderArchive, GitBranch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+type GithubExportBanner =
+  | { kind: "success"; repo: string; url: string }
+  | { kind: "error"; message: string };
 
 type HandoffExportCardProps = {
   projectId: string;
@@ -15,6 +19,10 @@ type HandoffExportCardProps = {
   taskHint?: string | null;
   cursorRulesHint?: string | null;
   briefHint?: string | null;
+  /** When true, show “Push to GitHub” (env has client id, secret, redirect URI). */
+  githubOAuthConfigured?: boolean;
+  /** Shown after OAuth callback redirect (success or error). */
+  githubExportBanner?: GithubExportBanner | null;
 };
 
 export function HandoffExportCard({
@@ -24,7 +32,9 @@ export function HandoffExportCard({
   prdHint,
   taskHint,
   cursorRulesHint,
-  briefHint
+  briefHint,
+  githubOAuthConfigured = false,
+  githubExportBanner = null
 }: HandoffExportCardProps) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
@@ -92,6 +102,32 @@ export function HandoffExportCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {githubExportBanner ? (
+          <div
+            className={
+              githubExportBanner.kind === "success"
+                ? "rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-100"
+                : "rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200"
+            }
+            role="status"
+          >
+            {githubExportBanner.kind === "success" ? (
+              <p>
+                Repository created:{" "}
+                <a
+                  href={githubExportBanner.url}
+                  className="font-medium underline underline-offset-2"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {githubExportBanner.repo}
+                </a>
+              </p>
+            ) : (
+              <p>GitHub export failed: {githubExportBanner.message}</p>
+            )}
+          </div>
+        ) : null}
         {(prdHint || taskHint || cursorRulesHint || briefHint) && (
           <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
             {prdHint ? <p>PRD: {prdHint}</p> : null}
@@ -151,6 +187,25 @@ export function HandoffExportCard({
             <FileJson className="h-4 w-4 shrink-0" />
             {loading === "artifacts-json" ? "Loading…" : "Artifacts (JSON)"}
           </Button>
+          {githubOAuthConfigured ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={loading !== null || !specPackLikelyReady}
+              className="justify-start gap-2 border-neutral-400 dark:border-neutral-600"
+              title={
+                specPackLikelyReady
+                  ? "Authorize on GitHub, then create a new repo under your account with the same files as Full handoff (ZIP)."
+                  : "Requires a valid PRD artifact (same as full handoff export)."
+              }
+              onClick={() => {
+                window.location.assign(`/api/projects/${projectId}/github/authorize`);
+              }}
+            >
+              <GitBranch className="h-4 w-4 shrink-0" />
+              Push to GitHub
+            </Button>
+          ) : null}
         </div>
         {error ? (
           <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">
