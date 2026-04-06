@@ -19,11 +19,31 @@ function bulletBlock(items: string[]): string {
   return items.map((item) => `- ${item}`).join("\n") + "\n";
 }
 
+function assumptionBulletBlock(items: z.infer<typeof PRDSchema>["assumptions"]): string {
+  if (items.length === 0) {
+    return "_None._\n";
+  }
+  return (
+    items.map((a) => `- ${a.description} — _Mitigation:_ ${a.mitigation}`).join("\n") + "\n"
+  );
+}
+
+function riskBulletBlock(items: z.infer<typeof PRDSchema>["risks"]): string {
+  if (items.length === 0) {
+    return "_None._\n";
+  }
+  return items.map((r) => `- ${r.description} — _Impact:_ ${r.impact}`).join("\n") + "\n";
+}
+
 function techStackBulletBlock(items: z.infer<typeof PRDSchema>["techStack"]): string {
   if (items.length === 0) {
     return "_None._\n";
   }
   return items.map((item) => `- ${item.name} (${item.category}, ${item.color})`).join("\n") + "\n";
+}
+
+function escapeMarkdownTableCell(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ").trim();
 }
 
 /**
@@ -42,15 +62,20 @@ export function serializePrdToMarkdown(prdData: z.infer<typeof PRDSchema>): stri
   const userStories =
     prd.userStories.length === 0
       ? "_None listed._\n"
-      : prd.userStories
-          .map((us) => {
-            const hints =
-              us.acceptanceHints.length > 0
-                ? `\n  - _Acceptance hints:_ ${us.acceptanceHints.map((h) => `\n    - ${h}`).join("")}`
-                : "";
-            return `- **${us.id}** — As a **${us.asA}**, I want **${us.iWant}**, so that ${us.soThat}.${hints}`;
-          })
-          .join("\n") + "\n";
+      : (() => {
+          const header = "| ID | Persona | Intent | Benefit |\n| --- | --- | --- | --- |";
+          const rows = prd.userStories.map(
+            (us) =>
+              `| ${escapeMarkdownTableCell(us.id)} | ${escapeMarkdownTableCell(us.persona)} | ${escapeMarkdownTableCell(us.intent)} | ${escapeMarkdownTableCell(us.benefit)} |`
+          );
+          const hints = prd.userStories
+            .filter((us) => us.acceptanceHints.length > 0)
+            .map(
+              (us) =>
+                `- **${us.id}** — _Acceptance hints:_ ${us.acceptanceHints.map((h) => h.replace(/\n/g, " ")).join("; ")}`
+            );
+          return [header, ...rows, ...(hints.length > 0 ? ["", ...hints] : [])].join("\n") + "\n";
+        })();
 
   const functional =
     prd.functionalRequirements.length === 0
@@ -94,10 +119,10 @@ export function serializePrdToMarkdown(prdData: z.infer<typeof PRDSchema>): stri
     techStackBulletBlock(prd.techStack),
     "\n",
     "## 11) Assumptions\n",
-    bulletBlock(prd.assumptions),
+    assumptionBulletBlock(prd.assumptions),
     "\n",
     "## 12) Risks\n",
-    bulletBlock(prd.risks)
+    riskBulletBlock(prd.risks)
   ];
 
   return parts.join("").trim() + "\n";

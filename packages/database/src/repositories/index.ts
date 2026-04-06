@@ -12,6 +12,7 @@ export {
   createProjectSession,
   getLatestProjectSessionByProjectId,
   getProjectSessionById,
+  listProjectSessionsForBackfill,
   setProjectSessionState,
   setProjectSessionStatus,
   updateProjectSessionById

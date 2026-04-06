@@ -1,8 +1,24 @@
 import { Command } from "@langchain/langgraph";
-import { getProjectSessionById, updateProjectById, type DatabaseClient } from "@vibe/database";
+import {
+  getProjectSessionById,
+  updateProjectById,
+  type DatabaseClient,
+  type UpdateProjectInput
+} from "@vibe/database";
 import { createPipelineGraph, createSessionConfig } from "./pipeline-graph";
 import type { PersistedCheckpointEnvelope } from "./state";
 import { PipelineStateSchema, type PipelineState } from "./state";
+
+/** Cleared optional intake fields must be removed from session state, not left stale. */
+const OPTIONAL_INTAKE_STATE_KEYS = [
+  "intakeClientName",
+  "intakeBusinessGoal",
+  "intakeTargetUsers",
+  "intakeConstraints",
+  "intakeRepoUrl",
+  "intakeDeadline",
+  "intakeSourceLinks"
+] as const;
 
 function parseEnvelope(stateJson: unknown): PersistedCheckpointEnvelope | null {
   if (!stateJson || typeof stateJson !== "object" || Array.isArray(stateJson)) {
@@ -45,7 +61,10 @@ export async function restartPipelineIntakeWithNewText(
   sessionId: string,
   projectId: string,
   rawIntakeText: string,
-  options?: { figmaFileKey?: string | null }
+  options: {
+    intakeStateSlice: Record<string, unknown>;
+    projectRowPatch: UpdateProjectInput;
+  }
 ): Promise<void> {
   const trimmed = rawIntakeText.trim();
   if (trimmed.length === 0) {
@@ -92,19 +111,17 @@ export async function restartPipelineIntakeWithNewText(
   const stateJsonPayload: Record<string, unknown> = {
     ...nextJson,
     rawIntakeText: trimmed,
+    ...options.intakeStateSlice,
     _sessionHistoryMeta: {
       is_brief_update: true,
       previous_brief: priorRaw,
       new_brief: trimmed
     }
   };
-
-  if (options?.figmaFileKey !== undefined) {
-    const fk = options.figmaFileKey;
-    if (fk === null || fk === "") {
-      delete stateJsonPayload.figmaFileKey;
-    } else {
-      stateJsonPayload.figmaFileKey = fk.trim();
+  delete stateJsonPayload.figmaFileKey;
+  for (const key of OPTIONAL_INTAKE_STATE_KEYS) {
+    if (!(key in options.intakeStateSlice)) {
+      delete stateJsonPayload[key];
     }
   }
 
@@ -114,10 +131,12 @@ export async function restartPipelineIntakeWithNewText(
     stateJson: stateJsonPayload
   };
 
-  const { error: projectError } = await updateProjectById(client, projectId, {
-    description: trimmed,
+  const projectPatch: UpdateProjectInput = {
+    ...options.projectRowPatch,
     updated_at: new Date().toISOString()
-  });
+  };
+
+  const { error: projectError } = await updateProjectById(client, projectId, projectPatch);
   if (projectError) {
     throw new Error(`Failed to update project: ${projectError.message}`);
   }

@@ -326,6 +326,12 @@ Rule enforcement additions:
 - Require schema validation (`@vibe/schema`) on all AI outputs before DB writes.
 - Prevent cross-layer FSD imports that violate architecture.
 
+### 5.1 Superpowers (workflow discipline, not a runtime dependency)
+
+- Superpowers is a **Cursor editor plugin**. The vibe-pipeline app does not call it or embed it.
+- Product requirement: exported handoff and generated `.cursor/rules` (for customer projects) should **encode** spec-first, task-first, and review-before-export behavior, and may **recommend** installing Superpowers for skill-based workflows.
+- Acceptance: no expectation that the dashboard controls Superpowers; alignment is proven by artifact contents and README/handoff notes, not by an API integration.
+
 ## 6) Delivery Sequence
 
 1. Apply SQL migration and generate Supabase types.

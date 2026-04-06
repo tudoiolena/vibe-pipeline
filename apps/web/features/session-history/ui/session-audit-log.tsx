@@ -1,32 +1,78 @@
 "use client";
 
-import { FileEdit, Sparkles, User } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileEdit } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { GapItem } from "@/features/gap-viewer/model/gap-session-state.schema";
 import { useSessionHistoryVersion } from "../context/session-history-refresh-context";
 import {
   SessionHistoryPayloadSchema,
-  SessionHistoryResponseSchema,
+  type ClarificationTimelineEvent,
   type SessionHistoryEntry
 } from "../model/session-history.schema";
+import {
+  CollapsibleTextWithFigma,
+  CollapsibleTimelineBlock,
+  TimelineEntry,
+  gapsListSummary,
+  inferUserContentSummary
+} from "./timeline-entry";
 
 type SessionAuditLogProps = {
   sessionId: string;
   embedded?: boolean;
 };
 
-const PARAGRAPH_PREVIEW_MAX = 3;
-
-type TimelineSegment =
-  | { kind: "milestone"; entry: SessionHistoryEntry }
-  | { kind: "brief_update"; entry: SessionHistoryEntry }
+type TimelineEvent =
   | {
-      kind: "turn";
-      user: SessionHistoryEntry | null;
-      analysis: SessionHistoryEntry | null;
+      kind: "timeline_figma_verified";
+      id: string;
+      sortAt: string;
+      tie: number;
+      fileKey?: string;
+    }
+  | {
+      kind: "timeline_figma_failed";
+      id: string;
+      sortAt: string;
+      tie: number;
+      error?: string;
+    }
+  | {
+      kind: "timeline_clarifications_merged";
+      id: string;
+      sortAt: string;
+      tie: number;
+    }
+  | {
+      kind: "user_message";
+      id: string;
+      sortAt: string;
+      tie: number;
+      text: string;
+    }
+  | {
+      kind: "assistant_gaps";
+      id: string;
+      sortAt: string;
+      tie: number;
+      entry: SessionHistoryEntry;
+      resolvedGaps: GapItem[];
+    }
+  | {
+      kind: "milestone";
+      id: string;
+      sortAt: string;
+      tie: number;
+      entry: SessionHistoryEntry;
+    }
+  | {
+      kind: "brief_update";
+      id: string;
+      sortAt: string;
+      tie: number;
+      entry: SessionHistoryEntry;
     };
 
 function priorityBadgeVariant(priority: GapItem["priority"]) {
@@ -53,63 +99,6 @@ function resolvedGapsSinceSnapshot(snapshot: SessionHistoryEntry | null, current
   return snapshot.gaps.filter(
     (p) => !current.gaps.some((c) => sameGapTitle(c.title, p.title))
   );
-}
-
-function formatEntryTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) {
-    return "—";
-  }
-  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-}
-
-function splitParagraphs(text: string): string[] {
-  const blocks = text
-    .split(/\n\s*\n/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-  if (blocks.length > 0) {
-    return blocks;
-  }
-  return text.trim() ? [text.trim()] : [];
-}
-
-function buildTimelineSegments(chrono: SessionHistoryEntry[]): TimelineSegment[] {
-  const out: TimelineSegment[] = [];
-  let i = 0;
-  while (i < chrono.length) {
-    const e = chrono[i];
-    if (e.type === "MILESTONE") {
-      out.push({ kind: "milestone", entry: e });
-      i++;
-      continue;
-    }
-    if (e.type === "BRIEF_UPDATE") {
-      out.push({ kind: "brief_update", entry: e });
-      i++;
-      continue;
-    }
-    if (e.type === "USER_INPUT") {
-      const next = chrono[i + 1];
-      if (next?.type === "ANALYSIS_RESULT") {
-        out.push({ kind: "turn", user: e, analysis: next });
-        i += 2;
-        continue;
-      }
-      const userPart = e.userClarification ? e : null;
-      const analysisPart = e.hasGapAnalysis ? e : null;
-      out.push({ kind: "turn", user: userPart, analysis: analysisPart });
-      i++;
-      continue;
-    }
-    if (e.type === "ANALYSIS_RESULT") {
-      out.push({ kind: "turn", user: null, analysis: e });
-      i++;
-      continue;
-    }
-    i++;
-  }
-  return out;
 }
 
 function gapDeltaBadge(entry: SessionHistoryEntry): ReactNode {
@@ -155,47 +144,30 @@ function gapDeltaBadge(entry: SessionHistoryEntry): ReactNode {
   );
 }
 
-function UserMessageBubble({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const paragraphs = useMemo(() => splitParagraphs(text), [text]);
-  const needsToggle = paragraphs.length > PARAGRAPH_PREVIEW_MAX;
-  const visibleParagraphs = expanded || !needsToggle ? paragraphs : paragraphs.slice(0, PARAGRAPH_PREVIEW_MAX);
+function userMessageNeedsCollapse(text: string): boolean {
+  const lines = text.split(/\n/).filter((l) => l.trim().length > 0);
+  if (lines.length > 3) {
+    return true;
+  }
+  return text.trim().length > 200;
+}
 
-  return (
-    <div className="flex justify-end gap-2">
-      <div
-        className={cn(
-          "max-w-[min(100%,28rem)] rounded-2xl rounded-tr-md bg-primary/5 px-4 py-3 text-sm leading-relaxed text-foreground shadow-sm ring-1 ring-primary/10"
-        )}
-      >
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-primary/80">You</p>
-        <div className="mt-1.5 space-y-2">
-          {visibleParagraphs.map((p, i) => (
-            <p key={i} className={cn(i > 0 && "mt-2")}>
-              {p}
-            </p>
-          ))}
-        </div>
-        {needsToggle ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="mt-2 h-auto px-0 py-1 text-xs font-normal text-primary hover:bg-transparent"
-            onClick={() => setExpanded((e) => !e)}
-          >
-            {expanded ? "Show less" : "Show more"}
-          </Button>
-        ) : null}
-      </div>
-      <div
-        className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary ring-1 ring-primary/20"
-        aria-hidden
-      >
-        <User className="size-4" strokeWidth={2} />
-      </div>
-    </div>
-  );
+function assistantGapsNeedCollapse(gaps: GapItem[], resolvedGaps: GapItem[]): boolean {
+  if (resolvedGaps.length > 0) {
+    return true;
+  }
+  if (gaps.length > 2) {
+    return true;
+  }
+  const descChars = gaps.reduce((n, g) => n + (g.description?.length ?? 0), 0);
+  return descChars > 180;
+}
+
+function gapListPreviewText(gaps: GapItem[]): string {
+  return gaps
+    .slice(0, 2)
+    .map((g) => (g.description?.trim() ? `${g.title} — ${g.description.trim()}` : g.title))
+    .join("\n");
 }
 
 function ResolvedGapsNestedList({ entryKey, resolvedGaps }: { entryKey: string; resolvedGaps: GapItem[] }) {
@@ -224,13 +196,27 @@ function ResolvedGapsNestedList({ entryKey, resolvedGaps }: { entryKey: string; 
   );
 }
 
-function AiResponseBubble({
+function AssistantGapsBody({
   entry,
   resolvedGaps
 }: {
   entry: SessionHistoryEntry;
   resolvedGaps: GapItem[];
 }) {
+  const figmaOkBanner =
+    entry.figmaLinkVerified === true ? (
+      <div className="mb-3 flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-950 dark:border-emerald-500/25 dark:bg-emerald-500/15 dark:text-emerald-50">
+        <CheckCircle2
+          className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+          aria-hidden
+        />
+        <span>
+          Figma design linked and validated. Specification gaps that depended on a confirmed file were cleared or
+          downgraded.
+        </span>
+      </div>
+    ) : null;
+
   const deltaBadge = gapDeltaBadge(entry);
   const summaryLine =
     entry.gapCountBefore !== null && entry.hasGapAnalysis ? (
@@ -246,119 +232,185 @@ function AiResponseBubble({
       </p>
     ) : null;
 
-  return (
-    <div className="flex justify-start gap-2">
-      <div
-        className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground ring-1 ring-border"
-        aria-hidden
-      >
-        <Sparkles className="size-4" strokeWidth={2} />
-      </div>
-      <div
-        className={cn(
-          "max-w-[min(100%,32rem)] rounded-2xl rounded-tl-md bg-muted/50 px-4 py-3 text-sm shadow-sm ring-1 ring-border/60 dark:bg-muted/25"
-        )}
-      >
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Assistant</p>
-          {deltaBadge}
-        </div>
-        <time className="mt-1 block text-[11px] font-medium tabular-nums text-muted-foreground">
-          {formatEntryTime(entry.timestamp)}
-        </time>
-        {summaryLine ? <div className="mt-2">{summaryLine}</div> : null}
-        <ResolvedGapsNestedList entryKey={entry.checkpointId} resolvedGaps={resolvedGaps} />
-      </div>
-    </div>
-  );
-}
+  const gaps = entry.gaps;
+  const summary = gapsListSummary(gaps.map((g) => g.title));
+  const collapse = assistantGapsNeedCollapse(gaps, resolvedGaps);
+  const preview = gapListPreviewText(gaps);
 
-function BriefUpdateBlock({ entry }: { entry: SessionHistoryEntry }) {
-  const beforeText = entry.previousBrief?.trim() ? entry.previousBrief : "—";
-  const afterText = entry.newBrief?.trim() ? entry.newBrief : "—";
-
-  return (
-    <div
-      className="relative my-5 overflow-hidden rounded-xl border border-violet-500/25 bg-gradient-to-br from-violet-500/[0.07] to-transparent px-4 py-4 shadow-sm dark:border-violet-400/20 dark:from-violet-500/[0.12]"
-      role="status"
-      aria-label="Brief updated"
-    >
-      <div className="flex gap-3">
-        <div
-          className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-violet-500/15 text-violet-700 ring-1 ring-violet-500/25 dark:bg-violet-500/20 dark:text-violet-200 dark:ring-violet-400/30"
-          aria-hidden
-        >
-          <FileEdit className="size-4" strokeWidth={2} />
-        </div>
-        <div className="min-w-0 flex-1 space-y-3">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-700/90 dark:text-violet-200/90">
-              Significant change
-            </p>
-            <p className="mt-0.5 text-sm font-semibold text-foreground">Initial brief updated</p>
-            <time className="mt-1 block text-[11px] font-medium tabular-nums text-muted-foreground">
-              {formatEntryTime(entry.timestamp)}
-            </time>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 sm:gap-4">
-            <div className="rounded-lg border border-border/80 bg-background/60 px-3 py-2.5 dark:bg-background/40">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Before</p>
-              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground line-through decoration-muted-foreground/40">
-                {beforeText}
-              </p>
+  const fullList = (
+    <div className="space-y-3">
+      {figmaOkBanner}
+      <div className="flex flex-wrap items-center gap-2">
+        {deltaBadge}
+        {summaryLine ? <div className="min-w-0 flex-1">{summaryLine}</div> : null}
+      </div>
+      <ul className="space-y-2 text-sm">
+        {gaps.map((gap, gi) => (
+          <li key={`${entry.checkpointId}-g-${gi}-${gap.title}`} className="list-none">
+            <div className="flex flex-wrap items-center gap-2">
+              {gap.priority === "High" ? (
+                <AlertTriangle
+                  className="size-4 shrink-0 text-red-600 dark:text-red-400"
+                  aria-hidden
+                />
+              ) : null}
+              <span className="font-medium text-foreground">{gap.title}</span>
+              <Badge variant={priorityBadgeVariant(gap.priority)} className="text-[10px]">
+                {gap.priority}
+              </Badge>
+              <span className="text-xs text-muted-foreground">{gap.type}</span>
             </div>
-            <div className="rounded-lg border border-primary/25 bg-primary/[0.04] px-3 py-2.5 ring-1 ring-primary/10 dark:bg-primary/[0.08]">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-primary/80">After</p>
-              <p className="mt-1 whitespace-pre-wrap text-sm font-medium leading-relaxed text-foreground">{afterText}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MilestoneDivider({ entry }: { entry: SessionHistoryEntry }) {
-  const label = entry.milestoneLabel ?? "Milestone";
-  return (
-    <div className="my-6 flex items-center gap-3" role="separator" aria-label={label}>
-      <span className="h-px flex-1 bg-border" aria-hidden />
-      <span
-        className={cn(
-          "shrink-0 rounded-full border border-amber-500/35 bg-amber-500/10 px-3 py-1 text-center text-xs font-semibold text-amber-950 shadow-sm dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-50"
-        )}
-      >
-        {label}
-      </span>
-      <span className="h-px flex-1 bg-border" aria-hidden />
-    </div>
-  );
-}
-
-function ClarificationRoundsSummary({ rounds }: { rounds: string[] }) {
-  if (rounds.length === 0) {
-    return null;
-  }
-  return (
-    <div className="mb-6 rounded-lg border border-border bg-muted/30 p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Clarifications submitted ({rounds.length})
-      </p>
-      <ol className="mt-3 list-decimal space-y-3 pl-5 text-sm leading-relaxed text-foreground">
-        {rounds.map((text, i) => (
-          <li key={i} className="pl-1">
-            <div className="whitespace-pre-wrap">{text}</div>
+            {gap.description ? (
+              <ul className="mt-1.5 list-disc pl-4 text-xs leading-relaxed text-muted-foreground marker:text-muted-foreground/70">
+                <li className="pl-0.5">{gap.description}</li>
+              </ul>
+            ) : null}
           </li>
         ))}
-      </ol>
+      </ul>
+      <ResolvedGapsNestedList entryKey={entry.checkpointId} resolvedGaps={resolvedGaps} />
     </div>
   );
+
+  if (!collapse) {
+    return fullList;
+  }
+
+  return (
+    <CollapsibleTimelineBlock
+      summary={summary}
+      collapsedContent={
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground line-clamp-2">
+          {preview || summary}
+        </p>
+      }
+    >
+      {fullList}
+    </CollapsibleTimelineBlock>
+  );
+}
+
+function buildTimelineAnnotationEvents(timeline: ClarificationTimelineEvent[]): TimelineEvent[] {
+  const sorted = [...timeline].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+  return sorted.map((e, i) => {
+    const tie = i;
+    if (e.kind === "figma_verified") {
+      return {
+        kind: "timeline_figma_verified" as const,
+        id: `tl-figma-ok-${e.at}-${i}`,
+        sortAt: e.at,
+        tie,
+        fileKey: e.fileKey
+      };
+    }
+    if (e.kind === "figma_failed") {
+      return {
+        kind: "timeline_figma_failed" as const,
+        id: `tl-figma-fail-${e.at}-${i}`,
+        sortAt: e.at,
+        tie,
+        error: e.error
+      };
+    }
+    return {
+      kind: "timeline_clarifications_merged" as const,
+      id: `tl-merge-${e.at}-${i}`,
+      sortAt: e.at,
+      tie
+    };
+  });
+}
+
+function buildCheckpointTimelineEvents(entries: SessionHistoryEntry[]): TimelineEvent[] {
+  const chrono = [...entries].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+  const events: TimelineEvent[] = [];
+  let tie = 0;
+
+  for (const entry of chrono) {
+    if (entry.type === "MILESTONE") {
+      events.push({
+        kind: "milestone",
+        id: `milestone-${entry.checkpointId}`,
+        sortAt: entry.timestamp,
+        tie: tie++,
+        entry
+      });
+      continue;
+    }
+    if (entry.type === "BRIEF_UPDATE") {
+      events.push({
+        kind: "brief_update",
+        id: `brief-${entry.checkpointId}`,
+        sortAt: entry.timestamp,
+        tie: tie++,
+        entry
+      });
+      continue;
+    }
+
+    const u = entry.userClarification?.trim() ?? "";
+    const hasUser = u.length > 0;
+    const hasGaps = entry.hasGapAnalysis;
+
+    if (hasUser) {
+      events.push({
+        kind: "user_message",
+        id: `user-${entry.checkpointId}`,
+        sortAt: entry.timestamp,
+        tie: tie++,
+        text: u
+      });
+    }
+
+    if (hasGaps) {
+      events.push({
+        kind: "assistant_gaps",
+        id: `gaps-${entry.checkpointId}`,
+        sortAt: entry.timestamp,
+        tie: tie++,
+        entry,
+        resolvedGaps: []
+      });
+    }
+  }
+
+  return events.map((ev) => ({ ...ev, tie: ev.tie + 500 }));
+}
+
+function mergeChronologicalTimeline(annotations: TimelineEvent[], checkpoint: TimelineEvent[]): TimelineEvent[] {
+  return [...annotations, ...checkpoint].sort((a, b) => {
+    const ta = new Date(a.sortAt).getTime();
+    const tb = new Date(b.sortAt).getTime();
+    if (ta !== tb) {
+      return ta - tb;
+    }
+    return a.tie - b.tie;
+  });
+}
+
+/** Attach resolved gap deltas per assistant checkpoint after sorting. */
+function attachResolvedGaps(
+  events: TimelineEvent[],
+  resolvedByCheckpointId: Map<string, GapItem[]>
+): TimelineEvent[] {
+  return events.map((ev) => {
+    if (ev.kind !== "assistant_gaps") {
+      return ev;
+    }
+    return {
+      ...ev,
+      resolvedGaps: resolvedByCheckpointId.get(ev.entry.checkpointId) ?? []
+    };
+  });
 }
 
 export function SessionAuditLog({ sessionId, embedded = false }: SessionAuditLogProps) {
   const historyVersion = useSessionHistoryVersion();
   const [entries, setEntries] = useState<SessionHistoryEntry[]>([]);
   const [clarificationRounds, setClarificationRounds] = useState<string[]>([]);
+  const [clarificationTimeline, setClarificationTimeline] = useState<ClarificationTimelineEvent[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -372,22 +424,18 @@ export function SessionAuditLog({ sessionId, embedded = false }: SessionAuditLog
         throw new Error(body?.error ?? `Failed to load history (${res.status})`);
       }
       const json: unknown = await res.json();
-      const wrapped = SessionHistoryPayloadSchema.safeParse(json);
-      if (wrapped.success) {
-        setEntries(wrapped.data.entries);
-        setClarificationRounds(wrapped.data.clarificationRounds);
-        return;
-      }
-      const legacy = SessionHistoryResponseSchema.safeParse(json);
-      if (!legacy.success) {
+      const parsed = SessionHistoryPayloadSchema.safeParse(json);
+      if (!parsed.success) {
         throw new Error("Unexpected history response shape.");
       }
-      setEntries(legacy.data);
-      setClarificationRounds([]);
+      setEntries(parsed.data.entries);
+      setClarificationRounds(parsed.data.clarificationRounds);
+      setClarificationTimeline(parsed.data.clarificationTimeline ?? []);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : "Failed to load history.");
       setEntries([]);
       setClarificationRounds([]);
+      setClarificationTimeline([]);
     } finally {
       setIsLoading(false);
     }
@@ -412,12 +460,11 @@ export function SessionAuditLog({ sessionId, embedded = false }: SessionAuditLog
     return map;
   }, [entries]);
 
-  const segments = useMemo(() => {
-    const chronological = [...entries].sort(
-      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
-    return buildTimelineSegments(chronological);
-  }, [entries]);
+  const timelineEvents = useMemo(() => {
+    const annot = buildTimelineAnnotationEvents(clarificationTimeline);
+    const checkpoint = attachResolvedGaps(buildCheckpointTimelineEvents(entries), resolvedByCheckpointId);
+    return mergeChronologicalTimeline(annot, checkpoint);
+  }, [entries, clarificationTimeline, resolvedByCheckpointId]);
 
   if (isLoading) {
     return (
@@ -446,7 +493,7 @@ export function SessionAuditLog({ sessionId, embedded = false }: SessionAuditLog
     );
   }
 
-  if (entries.length === 0 && clarificationRounds.length === 0) {
+  if (entries.length === 0 && clarificationRounds.length === 0 && clarificationTimeline.length === 0) {
     return (
       <div
         className={cn(
@@ -464,68 +511,204 @@ export function SessionAuditLog({ sessionId, embedded = false }: SessionAuditLog
       {!embedded ? (
         <>
           <h3 className="text-sm font-semibold text-foreground">Session timeline</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Conversation-style log — oldest at top.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Unified feed — oldest at top.</p>
         </>
       ) : null}
-      <ClarificationRoundsSummary rounds={clarificationRounds} />
-      {entries.length === 0 ? (
-        <p className="mt-4 text-sm text-muted-foreground">
-          No checkpoint timeline rows yet; clarifications above are from the live session state.
-        </p>
-      ) : (
-        <div className={cn("mt-6 space-y-4")}>
-        {segments.map((seg, si) => {
-          if (seg.kind === "milestone") {
-            return <MilestoneDivider key={`milestone-${seg.entry.checkpointId}-${si}`} entry={seg.entry} />;
-          }
-          if (seg.kind === "brief_update") {
-            return <BriefUpdateBlock key={`brief-${seg.entry.checkpointId}-${si}`} entry={seg.entry} />;
-          }
 
-          const { user, analysis } = seg;
-          const showTurnFrame = Boolean(user && analysis);
-          const analysisEntry = analysis;
-          const resolvedGaps =
-            analysisEntry != null ? (resolvedByCheckpointId.get(analysisEntry.checkpointId) ?? []) : [];
+      {timelineEvents.length > 0 ? (
+        <div className={cn("space-y-4", !embedded && "mt-6")}>
+          {timelineEvents.map((ev) => {
+            if (ev.kind === "timeline_figma_verified") {
+              return (
+                <TimelineEntry
+                  key={ev.id}
+                  role="system"
+                  senderLabel="Design"
+                  timeIso={ev.sortAt}
+                  align="center"
+                  className="py-0.5"
+                  bubbleClassName=""
+                >
+                  <div
+                    className="flex items-center justify-center gap-2 rounded-full border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-center text-xs text-emerald-950 shadow-sm dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-50"
+                    role="status"
+                  >
+                    <CheckCircle2 className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
+                    <span className="text-foreground">
+                      Figma link resolved and file validated
+                      {ev.fileKey ? (
+                        <span className="text-muted-foreground"> · {ev.fileKey}</span>
+                      ) : null}
+                      . Related specification gaps were cleared or downgraded.
+                    </span>
+                  </div>
+                </TimelineEntry>
+              );
+            }
 
-          const orphanNotice =
-            !user && !analysis ? (
-              <p className="text-center text-xs text-muted-foreground">Empty checkpoint</p>
-            ) : !user && analysis && !analysis.hasGapAnalysis ? (
-              <p className="text-sm text-muted-foreground">Pipeline update recorded.</p>
-            ) : user && !user.userClarification && !analysis?.hasGapAnalysis ? (
-              <p className="text-sm text-muted-foreground">Pipeline checkpoint (no gap snapshot).</p>
-            ) : null;
+            if (ev.kind === "timeline_figma_failed") {
+              return (
+                <TimelineEntry
+                  key={ev.id}
+                  role="system"
+                  senderLabel="Design"
+                  timeIso={ev.sortAt}
+                  align="center"
+                  className="py-0.5"
+                  bubbleClassName=""
+                >
+                  <div
+                    className="flex items-start justify-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-left text-xs text-amber-950 shadow-sm dark:border-amber-500/35 dark:bg-amber-500/15 dark:text-amber-50"
+                    role="status"
+                  >
+                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-700 dark:text-amber-300" aria-hidden />
+                    <span className="text-foreground">
+                      Figma file could not be validated.{ev.error ? ` ${ev.error}` : ""}
+                    </span>
+                  </div>
+                </TimelineEntry>
+              );
+            }
 
-          const inner = (
-            <div className="space-y-3">
-              {user?.userClarification ? <UserMessageBubble text={user.userClarification} /> : null}
-              {analysis && analysis.hasGapAnalysis ? (
-                <AiResponseBubble entry={analysis} resolvedGaps={resolvedGaps} />
-              ) : null}
-              {orphanNotice}
-            </div>
-          );
+            if (ev.kind === "timeline_clarifications_merged") {
+              return (
+                <TimelineEntry
+                  key={ev.id}
+                  role="system"
+                  senderLabel="Brief"
+                  timeIso={ev.sortAt}
+                  align="center"
+                  className="py-0.5"
+                  bubbleClassName=""
+                >
+                  <div
+                    className="flex items-center justify-center gap-2 rounded-full border border-border/80 bg-muted/30 px-3 py-2 text-center text-xs text-muted-foreground shadow-sm"
+                    role="status"
+                  >
+                    <CheckCircle2 className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
+                    <span className="text-foreground">Your clarification was saved into the project brief.</span>
+                  </div>
+                </TimelineEntry>
+              );
+            }
 
-          if (showTurnFrame) {
-            return (
-              <div
-                key={`turn-${user!.checkpointId}-${analysis!.checkpointId}-${si}`}
-                className="rounded-xl border border-border/70 bg-muted/20 p-4 shadow-sm dark:bg-muted/10"
-              >
-                {inner}
-              </div>
-            );
-          }
+            if (ev.kind === "user_message") {
+              const collapse = userMessageNeedsCollapse(ev.text);
+              const summary = inferUserContentSummary(ev.text);
+              return (
+                <TimelineEntry
+                  key={ev.id}
+                  role="user"
+                  senderLabel="You"
+                  timeIso={ev.sortAt}
+                  align="right"
+                >
+                  <CollapsibleTextWithFigma
+                    text={ev.text}
+                    summary={summary}
+                    collapsible={collapse}
+                  />
+                </TimelineEntry>
+              );
+            }
 
-          return (
-            <div key={`block-${user?.checkpointId ?? analysis?.checkpointId ?? si}-${si}`} className="px-0.5">
-              {inner}
-            </div>
-          );
-        })}
+            if (ev.kind === "assistant_gaps") {
+              return (
+                <TimelineEntry
+                  key={ev.id}
+                  role="assistant"
+                  senderLabel="Assistant"
+                  timeIso={ev.sortAt}
+                  align="left"
+                >
+                  <AssistantGapsBody entry={ev.entry} resolvedGaps={ev.resolvedGaps} />
+                </TimelineEntry>
+              );
+            }
+
+            if (ev.kind === "milestone") {
+              const label = ev.entry.milestoneLabel ?? "Milestone";
+              return (
+                <TimelineEntry
+                  key={ev.id}
+                  role="system"
+                  senderLabel="Milestone"
+                  timeIso={ev.sortAt}
+                  align="center"
+                  className="py-1"
+                >
+                  <div className="flex items-center gap-3" role="separator" aria-label={label}>
+                    <span className="h-px flex-1 bg-border" aria-hidden />
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-full border border-amber-500/35 bg-amber-500/10 px-3 py-1 text-center text-xs font-semibold text-amber-950 shadow-sm dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-50"
+                      )}
+                    >
+                      {label}
+                    </span>
+                    <span className="h-px flex-1 bg-border" aria-hidden />
+                  </div>
+                </TimelineEntry>
+              );
+            }
+
+            if (ev.kind === "brief_update") {
+              const beforeText = ev.entry.previousBrief?.trim() ? ev.entry.previousBrief : "—";
+              const afterText = ev.entry.newBrief?.trim() ? ev.entry.newBrief : "—";
+              return (
+                <TimelineEntry
+                  key={ev.id}
+                  role="system"
+                  senderLabel="Brief update"
+                  timeIso={ev.sortAt}
+                  align="center"
+                >
+                  <div
+                    className="overflow-hidden rounded-xl border border-violet-500/25 bg-linear-to-br from-violet-500/[0.07] to-transparent px-4 py-4 text-left shadow-sm dark:border-violet-400/20 dark:from-violet-500/12"
+                    role="status"
+                    aria-label="Brief updated"
+                  >
+                    <div className="flex gap-3">
+                      <div
+                        className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-violet-500/15 text-violet-700 ring-1 ring-violet-500/25 dark:bg-violet-500/20 dark:text-violet-200 dark:ring-violet-400/30"
+                        aria-hidden
+                      >
+                        <FileEdit className="size-4" strokeWidth={2} />
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-3">
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-700/90 dark:text-violet-200/90">
+                            Significant change
+                          </p>
+                          <p className="mt-0.5 text-sm font-semibold text-foreground">Initial brief updated</p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2 sm:gap-4">
+                          <div className="rounded-lg border border-border/80 bg-background/60 px-3 py-2.5 dark:bg-background/40">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                              Before
+                            </p>
+                            <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground line-through decoration-muted-foreground/40">
+                              {beforeText}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-primary/25 bg-primary/4 px-3 py-2.5 ring-1 ring-primary/10 dark:bg-primary/8">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-primary/80">After</p>
+                            <p className="mt-1 whitespace-pre-wrap text-sm font-medium leading-relaxed text-foreground">
+                              {afterText}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </TimelineEntry>
+              );
+            }
+
+            return null;
+          })}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

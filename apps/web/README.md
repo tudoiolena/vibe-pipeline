@@ -34,3 +34,15 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Handoff artifacts and backfill
+
+The web app reads handoff-related data from Supabase **artifacts** only (for example `brief`, `design_map`, `ui_kit`, `cursor_rules`, PRD, tasks)—not from session checkpoint JSON. After deploying stricter reads, **run the backfill once** (with the same Supabase env as the AI pipeline) so older sessions still have rows to read:
+
+```bash
+# from repo root (pnpm or npm workspace)
+pnpm --filter @vibe/ai backfill:handoff-artifacts
+# or: npm run backfill:handoff-artifacts -w @vibe/ai
+```
+
+That script copies valid **brief**, design map, UI kit, and cursor rules from each session’s checkpoint into `artifacts` when the latest artifact row has no `content_json`. Run it right before or immediately after the deploy that removes checkpoint fallbacks.

@@ -106,6 +106,10 @@
 - **CC-004**: AI workflow steps MUST use LangGraph with persisted workflow state in Supabase.
 - **CC-005**: Figma/Linear usage MUST be isolated to `@vibe/integrations`
   (`packages/integrations`).
+- **CC-006**: When intake provides a Figma URL and the feature includes a UI Kit or UI
+  specification, agents MUST validate via Figma MCP (`get_variable_defs`, and `get_metadata` or
+  `get_design_context` as needed). `TBD` MUST NOT be used for color, typography, or spacing values
+  that MCP can resolve from the linked file.
 
 ### Key Entities *(include if feature involves data)*
 

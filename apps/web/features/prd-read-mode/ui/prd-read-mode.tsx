@@ -2,13 +2,14 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { DesignMap, PRD, TaskTree, UIKit } from "@vibe/schema";
+import type { Brief, DesignMap, PRD, TaskTree, UIKit } from "@vibe/schema";
 import { getInternalSpecIdFromTask, serializePrdToMarkdown } from "@vibe/schema";
 import { Check, ChevronDown, ExternalLink, Loader2, PenTool } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { buildProjectSpecFilesFromPrd, type ProjectSpecFile } from "@/lib/project-spec-files";
+import { Textarea } from "@/components/ui/textarea";
+import { buildProjectSpecPack, withCursorHandoffDoc } from "@/lib/project-spec-files";
 import { getDynamicBadgeStyle } from "@/lib/tech-stack-badge";
 import { flattenTaskTree } from "@/lib/task-tree-utils";
 import { ExportLinearDialog } from "./export-linear-dialog";
@@ -78,26 +79,41 @@ const STAGE_LABELS: Record<string, string> = {
 
 type PrdReadModeProps = {
   prd: PRD;
+  /** When false, user stories / assumptions / risks show loading skeletons (e.g. PRD node not finished). */
+  prdNodeComplete?: boolean;
   sessionId?: string;
   projectId?: string;
   taskTree?: TaskTree | null;
   designMap?: DesignMap;
   cursorRules?: CursorRuleFile[];
-  specFiles?: ProjectSpecFile[];
   uiKit?: UIKit;
+  brief?: Brief | null;
   linearTeamDisplay?: string;
   defaultLinearTeamId?: string;
 };
 
+function TableSkeletonRow({ cols }: { cols: number }) {
+  return (
+    <tr className="border-t border-border">
+      {Array.from({ length: cols }).map((_, i) => (
+        <td key={i} className="px-3 py-2">
+          <div className="h-4 w-full max-w-48 animate-pulse rounded bg-muted" />
+        </td>
+      ))}
+    </tr>
+  );
+}
+
 export function PrdReadMode({
   prd,
+  prdNodeComplete = true,
   sessionId,
   projectId,
   taskTree,
   designMap,
   cursorRules = [],
-  specFiles = [],
   uiKit,
+  brief = null,
   linearTeamDisplay = "configured team",
   defaultLinearTeamId
 }: PrdReadModeProps) {
@@ -110,6 +126,12 @@ export function PrdReadMode({
   const [activeTab, setActiveTab] = useState<ReadModeTab>("prd");
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
   const [expandedTaskKeys, setExpandedTaskKeys] = useState<Set<string>>(() => new Set());
+  const [prdJsonDraft, setPrdJsonDraft] = useState("");
+  const [prdEditError, setPrdEditError] = useState<string | null>(null);
+  const [prdSaving, setPrdSaving] = useState(false);
+  const [taskJsonDraft, setTaskJsonDraft] = useState("");
+  const [taskEditError, setTaskEditError] = useState<string | null>(null);
+  const [taskSaving, setTaskSaving] = useState(false);
 
   const flatTasks = useMemo(() => (taskTree ? flattenTaskTree(taskTree) : []), [taskTree]);
   const figmaMappedTaskKeys = useMemo(
@@ -130,6 +152,16 @@ export function PrdReadMode({
     });
   }, [flatTasks]);
 
+  useEffect(() => {
+    setPrdJsonDraft(JSON.stringify(prd, null, 2));
+    setPrdEditError(null);
+  }, [prd]);
+
+  useEffect(() => {
+    setTaskJsonDraft(JSON.stringify(taskTree ?? { epics: [] }, null, 2));
+    setTaskEditError(null);
+  }, [taskTree]);
+
   const canExport = Boolean(sessionId && flatTasks.length > 0);
   const selectedTaskIds = useMemo(
     () => flatTasks.map((task) => task.externalKey).filter((key) => selectedKeys.has(key)),
@@ -142,8 +174,17 @@ export function PrdReadMode({
 
   const markdown = serializePrdToMarkdown(prd);
   const resolvedSpecFiles = useMemo(
-    () => (specFiles.length > 0 ? specFiles : buildProjectSpecFilesFromPrd(prd, uiKit)),
-    [specFiles, prd, uiKit]
+    () =>
+      withCursorHandoffDoc(
+        buildProjectSpecPack({
+          prd,
+          uiKit,
+          brief: brief ?? undefined,
+          designMap: designMap ?? undefined,
+          taskTree: taskTree ?? undefined
+        })
+      ),
+    [prd, uiKit, brief, designMap, taskTree]
   );
 
   const taskCheckboxRows = useMemo(
@@ -241,6 +282,86 @@ export function PrdReadMode({
     }
   }, []);
 
+  const onSavePrdJson = useCallback(async () => {
+    if (!projectId) {
+      return;
+    }
+    setPrdEditError(null);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(prdJsonDraft) as unknown;
+    } catch (err) {
+      setPrdEditError(err instanceof Error ? err.message : "Invalid JSON.");
+      return;
+    }
+    setPrdSaving(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/prd`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prd: parsed })
+      });
+      const payload: unknown = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const base =
+          typeof payload === "object" && payload !== null && "error" in payload
+            ? String((payload as { error?: unknown }).error ?? res.statusText)
+            : res.statusText;
+        const issues =
+          typeof payload === "object" && payload !== null && "issues" in payload
+            ? (payload as { issues: unknown }).issues
+            : null;
+        const suffix = issues != null ? `\n${JSON.stringify(issues, null, 2)}` : "";
+        throw new Error(base + suffix);
+      }
+      router.refresh();
+    } catch (err) {
+      setPrdEditError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPrdSaving(false);
+    }
+  }, [prdJsonDraft, projectId, router]);
+
+  const onSaveTaskTreeJson = useCallback(async () => {
+    if (!projectId) {
+      return;
+    }
+    setTaskEditError(null);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(taskJsonDraft) as unknown;
+    } catch (err) {
+      setTaskEditError(err instanceof Error ? err.message : "Invalid JSON.");
+      return;
+    }
+    setTaskSaving(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/task-tree`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskTree: parsed })
+      });
+      const payload: unknown = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const base =
+          typeof payload === "object" && payload !== null && "error" in payload
+            ? String((payload as { error?: unknown }).error ?? res.statusText)
+            : res.statusText;
+        const issues =
+          typeof payload === "object" && payload !== null && "issues" in payload
+            ? (payload as { issues: unknown }).issues
+            : null;
+        const suffix = issues != null ? `\n${JSON.stringify(issues, null, 2)}` : "";
+        throw new Error(base + suffix);
+      }
+      router.refresh();
+    } catch (err) {
+      setTaskEditError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTaskSaving(false);
+    }
+  }, [projectId, router, taskJsonDraft]);
+
   return (
     <Card className="overflow-hidden border-primary/20 shadow-md shadow-primary/5">
       <CardHeader className="border-b border-border bg-linear-to-br from-primary/6 to-transparent">
@@ -248,7 +369,8 @@ export function PrdReadMode({
           <div>
             <CardTitle className="text-xl tracking-tight">Product requirements</CardTitle>
             <CardDescription className="mt-1.5 max-w-xl leading-relaxed">
-              Read-only view of the generated PRD. Copy as Markdown for docs, tickets, or handoff.
+              Generated PRD and handoff tabs. Copy as Markdown from the button above, or edit structured JSON below to
+              save a new artifact version (Supabase).
             </CardDescription>
           </div>
           <div className="flex shrink-0 flex-col gap-2 sm:items-end">
@@ -358,20 +480,34 @@ export function PrdReadMode({
                     <thead className="bg-muted/50 text-left">
                       <tr>
                         <th className="px-3 py-2 font-medium">ID</th>
-                        <th className="px-3 py-2 font-medium">As a</th>
-                        <th className="px-3 py-2 font-medium">I want</th>
-                        <th className="px-3 py-2 font-medium">So that</th>
+                        <th className="px-3 py-2 font-medium">Persona</th>
+                        <th className="px-3 py-2 font-medium">Intent</th>
+                        <th className="px-3 py-2 font-medium">Benefit</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {prd.userStories.map((us) => (
-                        <tr key={us.id} className="border-t border-border">
-                          <td className="px-3 py-2 font-mono text-xs">{us.id}</td>
-                          <td className="px-3 py-2">{us.asA}</td>
-                          <td className="px-3 py-2">{us.iWant}</td>
-                          <td className="px-3 py-2">{us.soThat}</td>
+                      {!prdNodeComplete ? (
+                        <>
+                          <TableSkeletonRow cols={4} />
+                          <TableSkeletonRow cols={4} />
+                          <TableSkeletonRow cols={4} />
+                        </>
+                      ) : prd.userStories.length === 0 ? (
+                        <tr className="border-t border-border">
+                          <td colSpan={4} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                            No user stories yet. The PRD may still be generating.
+                          </td>
                         </tr>
-                      ))}
+                      ) : (
+                        prd.userStories.map((us) => (
+                          <tr key={us.id} className="border-t border-border">
+                            <td className="px-3 py-2 font-mono text-xs">{us.id}</td>
+                            <td className="px-3 py-2">{us.persona}</td>
+                            <td className="px-3 py-2">{us.intent}</td>
+                            <td className="px-3 py-2">{us.benefit}</td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -425,22 +561,93 @@ export function PrdReadMode({
 
               <section className="space-y-3">
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Assumptions</h2>
-                <ul className="list-inside list-disc space-y-1.5 text-foreground/90 marker:text-primary">
-                  {prd.assumptions.map((a) => (
-                    <li key={a}>{a}</li>
-                  ))}
-                </ul>
+                {!prdNodeComplete ? (
+                  <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+                    <div className="h-3 w-full animate-pulse rounded bg-muted" />
+                    <div className="h-3 w-5/6 animate-pulse rounded bg-muted" />
+                    <div className="h-3 w-4/6 animate-pulse rounded bg-muted" />
+                  </div>
+                ) : prd.assumptions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No assumptions listed yet.</p>
+                ) : (
+                  <div className="overflow-x-auto rounded-md border border-border">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-muted/50 text-left">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">Description</th>
+                          <th className="px-3 py-2 font-medium">Mitigation</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {prd.assumptions.map((a) => (
+                          <tr key={`${a.description.slice(0, 48)}-${a.mitigation.slice(0, 24)}`} className="border-t border-border">
+                            <td className="px-3 py-2 align-top text-foreground/90">{a.description}</td>
+                            <td className="px-3 py-2 align-top text-foreground/90">{a.mitigation}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </section>
 
               <section className="space-y-3 pb-4">
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Risks</h2>
-                <ul className="list-inside list-disc space-y-1.5 text-foreground/90 marker:text-primary">
-                  {prd.risks.map((r) => (
-                    <li key={r}>{r}</li>
-                  ))}
-                </ul>
+                {!prdNodeComplete ? (
+                  <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+                    <div className="h-3 w-full animate-pulse rounded bg-muted" />
+                    <div className="h-3 w-5/6 animate-pulse rounded bg-muted" />
+                    <div className="h-3 w-4/6 animate-pulse rounded bg-muted" />
+                  </div>
+                ) : prd.risks.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No risks listed yet.</p>
+                ) : (
+                  <div className="overflow-x-auto rounded-md border border-border">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-muted/50 text-left">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">Description</th>
+                          <th className="px-3 py-2 font-medium">Impact</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {prd.risks.map((r) => (
+                          <tr key={`${r.description.slice(0, 48)}-${r.impact.slice(0, 24)}`} className="border-t border-border">
+                            <td className="px-3 py-2 align-top text-foreground/90">{r.description}</td>
+                            <td className="px-3 py-2 align-top text-foreground/90">{r.impact}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </section>
             </article>
+            {projectId ? (
+              <details className="mt-6 rounded-md border border-border bg-muted/20 p-4">
+                <summary className="cursor-pointer text-sm font-medium text-foreground">Edit PRD (JSON) & save</summary>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Must match <span className="font-mono">PRDSchema</span>. Failed saves show validation or server errors
+                  here.
+                </p>
+                <Textarea
+                  className="mt-3 min-h-[280px] font-mono text-xs"
+                  value={prdJsonDraft}
+                  onChange={(e) => setPrdJsonDraft(e.target.value)}
+                  spellCheck={false}
+                />
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Button type="button" disabled={prdSaving} onClick={() => void onSavePrdJson()}>
+                    {prdSaving ? "Saving…" : "Save PRD"}
+                  </Button>
+                </div>
+                {prdEditError ? (
+                  <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">
+                    {prdEditError}
+                  </pre>
+                ) : null}
+              </details>
+            ) : null}
             </div>
           ) : null}
 
@@ -639,6 +846,34 @@ export function PrdReadMode({
                 ))
               )}
             </div>
+            {projectId ? (
+              <details className="mt-4 rounded-md border border-border bg-muted/20 p-4">
+                <summary className="cursor-pointer text-sm font-medium text-foreground">
+                  Edit task tree (JSON) & save
+                </summary>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Must match <span className="font-mono">TaskTreeSchema</span> (<span className="font-mono">epics</span>{" "}
+                  array). Saving writes a new tasks artifact and syncs the relational{" "}
+                  <span className="font-mono">tasks</span> table.
+                </p>
+                <Textarea
+                  className="mt-3 min-h-[280px] font-mono text-xs"
+                  value={taskJsonDraft}
+                  onChange={(e) => setTaskJsonDraft(e.target.value)}
+                  spellCheck={false}
+                />
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Button type="button" disabled={taskSaving} onClick={() => void onSaveTaskTreeJson()}>
+                    {taskSaving ? "Saving…" : "Save task tree"}
+                  </Button>
+                </div>
+                {taskEditError ? (
+                  <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">
+                    {taskEditError}
+                  </pre>
+                ) : null}
+              </details>
+            ) : null}
             </div>
           ) : null}
 

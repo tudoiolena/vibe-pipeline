@@ -33,6 +33,7 @@
 ## AC-07 AI Handoff Pack
 - `07-implementation-plan.md`, `08-test-plan.md`, `06-design-map.json`, and `.cursor/rules/*` are generated.
 - Handoff pack includes architecture summary, file plan, API contract draft, and test checklist.
+- Handoff clarifies file-based Cursor workflow: optional Superpowers (and similar) are developer-side; source of truth remains exported specs and rules.
 - Review/approve is required before export.
 
 ## AC-08 Export Flows

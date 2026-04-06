@@ -36,6 +36,10 @@
 - [ ] All new/changed runtime data contracts are defined with Zod (prefer shared schemas from `packages/schema`).
 - [ ] AI workflow scope uses LangGraph and persists workflow state in Supabase.
 - [ ] Any Figma/Linear interaction is routed only through `@vibe/integrations` (`packages/integrations`).
+- [ ] If intake includes a Figma URL and the feature defines a UI Kit or UI token spec, Figma MCP
+      reads (`get_variable_defs`, and `get_metadata` or `get_design_context` as needed) completed
+      before finalizing those specs; no `TBD` placeholders for resolvable color, typography, or
+      spacing.
 
 ## Project Structure
 

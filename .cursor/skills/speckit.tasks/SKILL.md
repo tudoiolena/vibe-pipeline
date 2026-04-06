@@ -1,4 +1,10 @@
 ---
+name: speckit.tasks
+description: Generate an actionable, dependency-ordered tasks.md for the feature based on available design artifacts.
+disable-model-invocation: true
+---
+
+---
 description: Generate an actionable, dependency-ordered tasks.md for the feature based on available design artifacts.
 handoffs: 
   - label: Analyze For Consistency
@@ -59,7 +65,7 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 2. **Load design documents**: Read from FEATURE_DIR:
    - **Required**: plan.md (tech stack, libraries, structure), spec.md (user stories with priorities)
-   - **Optional**: data-model.md (entities), contracts/ (interface contracts), research.md (decisions), quickstart.md (test scenarios)
+   - **Optional**: data-model.md (entities), contracts/ (interface contracts), research.md (decisions), quickstart.md (test scenarios), `project-spec/06-ui-kit.md` and/or UI Kit JSON (colors, typography, `componentInventory`, `figmaExtraction`)
    - Note: Not all projects have all documents. Generate tasks based on what's available.
 
 3. **Execute task generation workflow**:
@@ -189,6 +195,12 @@ Every task MUST strictly follow this format:
    - Shared infrastructure → Setup phase (Phase 1)
    - Foundational/blocking tasks → Foundational phase (Phase 2)
    - Story-specific setup → within that story's phase
+
+5. **From Figma UI Kit (`figmaExtraction.readMethod`)**:
+   - When `figmaExtraction.readMethod` is **`rest_deep_page_discovery`** (deep page subtree resolved after shallow page listing — same intent as Figma MCP–backed discovery in constitution VI):
+     - Use **identified Figma components** from the kit (e.g. **Course Cards**, **Progress Bars**, lesson/module frames, enrollment CTAs) as the **primary blueprint** for **Frontend** task titles and descriptions: name the component or pattern, the screen area it belongs to, and how it maps to the user story.
+     - For every Frontend task in that scope, record **`acceptanceCriteria`** (in `project-spec/10-tasks.json` task nodes, or equivalent structured output) so that **at least one criterion explicitly references the Figma page** used for extraction — cite **`figmaExtraction.targetedPageName`** verbatim (or the documented canvas title if the kit only appears in `06-ui-kit.md` prose).
+   - Do not substitute generic UI tasks when this read method applies; tie implementation work to the observed component inventory unless the spec explicitly deprioritizes a pattern.
 
 ### Phase Structure
 

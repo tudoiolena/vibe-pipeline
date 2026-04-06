@@ -1,4 +1,10 @@
 ---
+name: speckit.analyze
+description: Perform a non-destructive cross-artifact consistency and quality analysis across spec.md, plan.md, and tasks.md after task generation.
+disable-model-invocation: true
+---
+
+---
 description: Perform a non-destructive cross-artifact consistency and quality analysis across spec.md, plan.md, and tasks.md after task generation.
 ---
 
@@ -16,9 +22,9 @@ Identify inconsistencies, duplications, ambiguities, and underspecified items ac
 
 ## Operating Constraints
 
-**STRICTLY READ-ONLY**: Do **not** modify any files. Output a structured analysis report. Offer an optional remediation plan (user must explicitly approve before any follow-up editing commands would be invoked manually).
+**STRICTLY READ-ONLY (repository)**: Do **not** modify any repository files. You MAY call read-only **Figma MCP** tools to verify linked files. Output a structured analysis report. Offer an optional remediation plan (user must explicitly approve before any follow-up editing commands would be invoked manually).
 
-**Constitution Authority**: The project constitution (`.specify/memory/constitution.md`) is **non-negotiable** within this analysis scope. Constitution conflicts are automatically CRITICAL and require adjustment of the spec, plan, or tasks—not dilution, reinterpretation, or silent ignoring of the principle. If a principle itself needs to change, that must occur in a separate, explicit constitution update outside `/speckit.analyze`.
+**Constitution Authority**: The project constitution (`.specify/memory/constitution.md`) is **non-negotiable** within this analysis scope. Constitution conflicts are automatically CRITICAL and require adjustment of the spec, plan, or tasks—not dilution, reinterpretation, or silent ignoring of the principle. If a principle itself needs to change, that must occur in a separate, explicit constitution update outside `/speckit.analyze`. **Principle VI (Design System Enforcement)** requires MCP-backed validation whenever a Figma URL is in scope; this command’s Figma pass implements that check for analysis (not merely “URL present”).
 
 ## Execution Steps
 
@@ -64,6 +70,23 @@ Load only the minimal necessary context from each artifact:
 
 - Load `.specify/memory/constitution.md` for principle validation
 
+### 2b. Figma MCP verification (when Figma URLs exist)
+
+**Trigger**: If `spec.md`, `plan.md`, or `tasks.md` contains at least one `figma.com` design URL (design, branch, or equivalent file link), you MUST run this pass. If no Figma URL appears in any artifact, record **Figma MCP: N/A (no URL in scope)** in the report metrics and skip the rest of this subsection.
+
+**Do not** treat “a link string is present” as sufficient. **Old logic (invalid)**: “Is there a Figma link?” **New logic (required)**:
+
+1. **Parse** each URL into `fileKey` and `nodeId` per Figma URL rules (including branch URLs where branch key substitutes for `fileKey`; normalize `node-id` by replacing `-` with `:` in the id segment).
+2. **Accessibility & valid nodes**: Use the **Figma MCP** (`plugin-figma-figma` or equivalent enabled server) to confirm the file is reachable and returns structured data.
+   - **List pages / document structure**: Prefer `get_metadata` starting from the document or page root (e.g. page id such as `0:1` when appropriate, or the node from the URL) to obtain an XML overview of pages, frames, and node ids. If the tool errors, times out, or returns no usable nodes, treat as a verification failure (see severities below). For **Figma Make** URLs, follow the MCP tool documentation (some read tools are not supported for Make files—use the prescribed alternative without skipping verification).
+3. **UI Kit discovery**: From metadata (or equivalent MCP output), determine whether a page or top-level frame/layer **matches “UI Kit”** (case-insensitive substring on layer/page name, e.g. contains `UI Kit`). Record which `nodeId` was identified.
+4. **Primary tokens**: If a UI Kit node is found, call `get_variable_defs` with that `fileKey` and a relevant `nodeId` (UI Kit frame/page or file scope per tool constraints) to extract **primary design tokens** (color, typography, spacing variables). If no “UI Kit” named container exists, still attempt variable extraction from the linked `nodeId` or file root context and note the deviation in the report.
+5. **Failures**:
+   - **CRITICAL**: Link present but MCP proves the file unreachable, `fileKey`/`nodeId` invalid, or constitution-level violation (e.g. URL cited but MCP confirms no valid document nodes).
+   - **HIGH**: File reachable and nodes valid, but **primary token extraction fails** (empty variables, MCP error on `get_variable_defs`, or UI Kit expected by spec but not found and tokens cannot be resolved). Label these explicitly as **High Priority Gaps** in the findings table (category **FigmaMCP** or **Constitution Alignment** as appropriate).
+
+If the Figma MCP server is not available in the environment, emit one **HIGH** finding: cannot verify accessibility or tokens; recommend enabling MCP and re-running `/speckit.analyze`.
+
 ### 3. Build Semantic Models
 
 Create internal representations (do not include raw artifacts in output):
@@ -72,6 +95,7 @@ Create internal representations (do not include raw artifacts in output):
 - **User story/action inventory**: Discrete user actions with acceptance criteria
 - **Task coverage mapping**: Map each task to one or more requirements or stories (inference by keyword / explicit reference patterns like IDs or key phrases)
 - **Constitution rule set**: Extract principle names and MUST/SHOULD normative statements
+- **Figma MCP verification record**: For each in-scope URL, store `{ url, fileKey, nodeId, pagesListed, uiKitNodeId|null, tokenExtractionOk, errorSummary }` for the report (no raw MCP dumps—summarize)
 
 ### 4. Detection Passes (Token-Efficient Analysis)
 
@@ -111,12 +135,17 @@ Focus on high-signal findings. Limit to 50 findings total; aggregate remainder i
 - Task ordering contradictions (e.g., integration tasks before foundational setup tasks without dependency note)
 - Conflicting requirements (e.g., one requires Next.js while other specifies Vue)
 
+#### G. Figma MCP & design-token gaps
+
+- Cross-check §2b results with spec/plan language: if artifacts promise a UI Kit or token-backed UI but MCP shows missing UI Kit or failed extraction, flag per §2b severities
+- Tasks that claim “Figma validated” or “tokens resolved” without a matching MCP verification record in this run → **HIGH** (process gap)
+
 ### 5. Severity Assignment
 
 Use this heuristic to prioritize findings:
 
-- **CRITICAL**: Violates constitution MUST, missing core spec artifact, or requirement with zero coverage that blocks baseline functionality
-- **HIGH**: Duplicate or conflicting requirement, ambiguous security/performance attribute, untestable acceptance criterion
+- **CRITICAL**: Violates constitution MUST, missing core spec artifact, or requirement with zero coverage that blocks baseline functionality; Figma URL in artifacts but MCP confirms file/nodes inaccessible or invalid
+- **HIGH**: Duplicate or conflicting requirement, ambiguous security/performance attribute, untestable acceptance criterion; reachable Figma file but **primary token extraction failed** or UI Kit not found when expected; MCP unavailable so verification could not run
 - **MEDIUM**: Terminology drift, missing non-functional task coverage, underspecified edge case
 - **LOW**: Style/wording improvements, minor redundancy not affecting execution order
 
@@ -141,6 +170,11 @@ Output a Markdown report (no file writes) with the following structure:
 
 **Unmapped Tasks:** (if any)
 
+**Figma MCP Verification:** (omit section if N/A—no Figma URL in artifacts)
+
+| URL (short) | fileKey | Accessible | Pages listed | UI Kit found | Tokens extracted | Status |
+|-------------|---------|------------|--------------|--------------|------------------|--------|
+
 **Metrics:**
 
 - Total Requirements
@@ -149,6 +183,7 @@ Output a Markdown report (no file writes) with the following structure:
 - Ambiguity Count
 - Duplication Count
 - Critical Issues Count
+- Figma MCP: URLs checked / failures (CRITICAL vs HIGH)
 
 ### 7. Provide Next Actions
 
@@ -173,7 +208,7 @@ Ask the user: "Would you like me to suggest concrete remediation edits for the t
 
 ### Analysis Guidelines
 
-- **NEVER modify files** (this is read-only analysis)
+- **NEVER modify repository files** (this is read-only analysis for the repo); **Figma MCP read tools are allowed** for verification
 - **NEVER hallucinate missing sections** (if absent, report them accurately)
 - **Prioritize constitution violations** (these are always CRITICAL)
 - **Use examples over exhaustive rules** (cite specific instances, not generic patterns)

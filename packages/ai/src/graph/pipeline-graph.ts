@@ -19,13 +19,13 @@ export const PIPELINE_CHECKPOINT_NAMESPACE = "pipeline";
 export function createPipelineGraph(client: DatabaseClient) {
   const checkpointer = new SupabaseSessionCheckpointer(client);
   const intakeNormalizerNode = createIntakeNormalizerNode(client);
-  const gapDetectorNode = createGapDetectorNode();
+  const gapDetectorNode = createGapDetectorNode(client);
   const needsClarificationNode = createNeedsClarificationNode(client);
   const applyClarificationNode = createApplyClarificationNode(client);
   const prdDesignerNode = createPrdDesignerNode(client);
   const taskGeneratorNode = createTaskGeneratorNode(client);
-  const implementationPlannerNode = createImplementationPlannerNode();
-  const designAnalysisNode = createDesignAnalysisNode();
+  const implementationPlannerNode = createImplementationPlannerNode(client);
+  const designAnalysisNode = createDesignAnalysisNode(client);
 
   const graph = new StateGraph(PipelineStateSchema)
     .addNode("intakeNormalizer", intakeNormalizerNode)

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   createClient,
   createProject,
@@ -6,11 +5,26 @@ import {
   getProjectSessionById,
   listArtifactsByProjectId
 } from "@vibe/database";
-import { createPipelineGraph, createSessionConfig, type PersistedCheckpointEnvelope } from "../graph";
+import { TaskTreeSchema } from "@vibe/schema";
+import {
+  createPipelineGraph,
+  createSessionConfig,
+  resumePipelineWithClarification,
+  type PersistedCheckpointEnvelope
+} from "../graph";
 
 type ScriptArgs = {
   sessionId?: string;
   brief: string;
+  /** When set with --session-id, runs resumePipelineWithClarification instead of a raw graph.invoke. */
+  clarification?: string;
+  /** Exit non-zero unless tasks + cursor rules exist in state and artifact rows were created. */
+  strictHandoff: boolean;
+  /**
+   * Sets VIBE_TEST_PIPELINE_SKIP_CLARIFICATION so gapDetector does not stop on High gaps (local script only).
+   * Production UI must not rely on this.
+   */
+  skipClarificationGate: boolean;
 };
 
 const DEFAULT_MESSY_BRIEF =
@@ -18,7 +32,9 @@ const DEFAULT_MESSY_BRIEF =
 
 function parseArgs(argv: string[]): ScriptArgs {
   const args: ScriptArgs = {
-    brief: DEFAULT_MESSY_BRIEF
+    brief: DEFAULT_MESSY_BRIEF,
+    strictHandoff: false,
+    skipClarificationGate: false
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -31,6 +47,19 @@ function parseArgs(argv: string[]): ScriptArgs {
     if (token === "--brief") {
       args.brief = argv[index + 1] ?? DEFAULT_MESSY_BRIEF;
       index += 1;
+      continue;
+    }
+    if (token === "--strict-handoff") {
+      args.strictHandoff = true;
+      continue;
+    }
+    if (token === "--clarification") {
+      args.clarification = argv[index + 1]?.trim();
+      index += 1;
+      continue;
+    }
+    if (token === "--skip-clarification-gate") {
+      args.skipClarificationGate = true;
       continue;
     }
   }
@@ -55,7 +84,20 @@ function prettyJson(value: unknown): string {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  if (args.skipClarificationGate) {
+    process.env.VIBE_TEST_PIPELINE_SKIP_CLARIFICATION = "1";
+    console.log("[test-pipeline] skip-clarification-gate: gap High-priority stop disabled for this process only.");
+  }
   const client = createClient();
+
+  if (args.clarification !== undefined) {
+    if (!args.sessionId) {
+      throw new Error("--clarification requires --session-id (existing session waiting for input).");
+    }
+    if (args.clarification.length === 0) {
+      throw new Error("--clarification value must be non-empty.");
+    }
+  }
 
   let projectId: string;
   let sessionId: string;
@@ -105,7 +147,8 @@ async function main(): Promise<void> {
 
   const beforeEnvelope = parseEnvelope(beforeSession.state_json);
   const checkpointId = beforeEnvelope ? (beforeEnvelope.checkpoint as { id?: string }).id : undefined;
-  const mode = checkpointId ? "resume" : "fresh";
+  const mode =
+    args.clarification !== undefined ? "clarification_resume" : checkpointId ? "resume" : "fresh";
   const sessionConfig = createSessionConfig(sessionId, checkpointId);
 
   const { graph } = createPipelineGraph(client);
@@ -127,7 +170,10 @@ async function main(): Promise<void> {
 
   console.log(`Run mode: ${mode}`);
   console.log(`Checkpoint before run: ${checkpointId ?? "<none>"}`);
-  if (mode === "resume") {
+  if (args.clarification !== undefined) {
+    console.log("Invoking resumePipelineWithClarification…");
+    await resumePipelineWithClarification(client, sessionId, args.clarification);
+  } else if (mode === "resume") {
     await graph.invoke(undefined as never, sessionConfig);
   } else {
     await graph.invoke(inputState, sessionConfig);
@@ -149,11 +195,15 @@ async function main(): Promise<void> {
   }
   const briefArtifactsAfter = (artifactsAfter.data ?? []).filter((artifact) => artifact.artifact_type === "brief").length;
   const prdArtifactsAfter = (artifactsAfter.data ?? []).filter((artifact) => artifact.artifact_type === "prd").length;
+  const tasksArtifactRows = (artifactsAfter.data ?? []).filter((artifact) => artifact.artifact_type === "tasks").length;
+  const cursorRulesArtifactRows = (artifactsAfter.data ?? []).filter((artifact) => artifact.artifact_type === "cursor_rules")
+    .length;
 
   const pipelineState = afterEnvelope.pipelineState;
   const stateJson = pipelineState.stateJson as Record<string, unknown>;
   const brief = stateJson.brief ?? null;
   const prd = stateJson.prd ?? null;
+
   const gapAnalysis = stateJson.gapAnalysis as { gaps?: unknown[] } | undefined;
   const gaps = Array.isArray(gapAnalysis?.gaps) ? gapAnalysis.gaps : [];
   const highPriorityGapExists = gaps.some((gap) => {
@@ -183,7 +233,44 @@ async function main(): Promise<void> {
   console.log(`brief_artifact_count_after: ${briefArtifactsAfter}`);
   console.log(`prd_artifact_count_before: ${prdArtifactsBefore}`);
   console.log(`prd_artifact_count_after: ${prdArtifactsAfter}`);
-  console.log(`resumed_from_checkpoint: ${mode === "resume" ? "true" : "false"}`);
+  console.log(`tasks_artifact_rows_after: ${tasksArtifactRows}`);
+  console.log(`cursor_rules_artifact_rows_after: ${cursorRulesArtifactRows}`);
+  console.log(
+    `resumed_from_checkpoint: ${mode === "resume" || mode === "clarification_resume" ? "true" : "false"}`
+  );
+
+  const tasksParsed = TaskTreeSchema.safeParse(stateJson.tasks ?? stateJson.taskTree);
+  const epicCount = tasksParsed.success ? tasksParsed.data.epics.length : 0;
+  const cursorRulesRaw = stateJson.cursorRules;
+  const cursorRuleFilesInState = Array.isArray(cursorRulesRaw) ? cursorRulesRaw.length : 0;
+  const workflowStatus = typeof stateJson.workflowStatus === "string" ? stateJson.workflowStatus : "";
+  const stoppedForClarification =
+    workflowStatus === "awaiting_user_clarification" && afterSession.graph_status === "interrupted_for_input";
+  const handoffPrepared = workflowStatus === "handoff_prepared";
+  const hasValidTaskTree = tasksParsed.success && epicCount > 0;
+  const hasFiveCursorRules = cursorRuleFilesInState === 5;
+
+  console.log("---- Handoff / export readiness ----");
+  console.log(`workflowStatus: ${workflowStatus || "<missing>"}`);
+  console.log(`stopped_for_clarification: ${stoppedForClarification}`);
+  console.log(`task_tree_epics_in_state: ${epicCount}${tasksParsed.success ? "" : " (parse failed — see state_json.tasks)"}`);
+  console.log(`cursor_rule_files_in_state: ${cursorRuleFilesInState} (implementation planner emits 5)`);
+  console.log(`handoff_prepared: ${handoffPrepared}`);
+  if (stoppedForClarification) {
+    console.log(
+      "Note: No task backlog or cursor rules are produced until gaps are resolved — the graph ends at needsClarification."
+    );
+  }
+  if (!stoppedForClarification && !hasValidTaskTree) {
+    console.log(
+      "Note: Missing or invalid task tree in checkpoint state. Export ZIP reads latest `tasks` artifact rows; if the run failed after PRD or never reached taskGenerator, rows may be empty."
+    );
+  }
+  if (handoffPrepared && (!hasFiveCursorRules || cursorRulesArtifactRows === 0)) {
+    console.log(
+      "Warning: workflow says handoff_prepared but cursor rules missing in state or DB — check persistCursorRulesArtifact errors."
+    );
+  }
 
   const highPriorityStopConfirmed =
     highPriorityGapExists &&
@@ -203,6 +290,36 @@ async function main(): Promise<void> {
   console.log(
     `To run resume test: npm run test:pipeline --workspace @vibe/ai -- --session-id ${sessionId}`
   );
+
+  if (args.strictHandoff) {
+    const failures: string[] = [];
+    if (stoppedForClarification) {
+      failures.push(
+        "Pipeline stopped for user clarification (high-priority gaps or redraft). Resume via API after answering gaps."
+      );
+    }
+    if (!hasValidTaskTree) {
+      failures.push("Expected non-empty TaskTree in state (tasks/taskTree) after a full run.");
+    }
+    if (tasksArtifactRows === 0) {
+      failures.push("Expected at least one `tasks` artifact row on the project (taskGenerator persist).");
+    }
+    if (!hasFiveCursorRules) {
+      failures.push("Expected exactly 5 cursor rule files in state (implementationPlanner output).");
+    }
+    if (cursorRulesArtifactRows === 0) {
+      failures.push("Expected at least one `cursor_rules` artifact row on the project.");
+    }
+    if (failures.length > 0) {
+      console.error("---- --strict-handoff FAILED ----");
+      for (const line of failures) {
+        console.error(` - ${line}`);
+      }
+      process.exitCode = 1;
+    } else {
+      console.log("---- --strict-handoff OK ----");
+    }
+  }
 }
 
 void main().catch((error: unknown) => {

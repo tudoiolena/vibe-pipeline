@@ -23,6 +23,12 @@ export type Database = {
           source_figma_url: string | null;
           source_repo_url: string | null;
           source_links: Json;
+          client_name: string | null;
+          business_goal: string | null;
+          target_users: string | null;
+          constraints: string | null;
+          raw_brief: string | null;
+          deadline: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -45,6 +51,12 @@ export type Database = {
           source_figma_url?: string | null;
           source_repo_url?: string | null;
           source_links?: Json;
+          client_name?: string | null;
+          business_goal?: string | null;
+          target_users?: string | null;
+          constraints?: string | null;
+          raw_brief?: string | null;
+          deadline?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -67,6 +79,12 @@ export type Database = {
           source_figma_url?: string | null;
           source_repo_url?: string | null;
           source_links?: Json;
+          client_name?: string | null;
+          business_goal?: string | null;
+          target_users?: string | null;
+          constraints?: string | null;
+          raw_brief?: string | null;
+          deadline?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -191,7 +209,7 @@ export type Database = {
           category: "roles" | "nfr" | "edge_case" | "integration" | "security" | "scope" | "data" | "workflow";
           priority: "low" | "medium" | "high" | "critical";
           answer_text: string | null;
-          status: "open" | "answered" | "resolved" | "dismissed";
+          status: "open" | "answered" | "resolved" | "dismissed" | "pending";
           created_at: string;
           updated_at: string;
         };
@@ -204,7 +222,7 @@ export type Database = {
           category: "roles" | "nfr" | "edge_case" | "integration" | "security" | "scope" | "data" | "workflow";
           priority?: "low" | "medium" | "high" | "critical";
           answer_text?: string | null;
-          status?: "open" | "answered" | "resolved" | "dismissed";
+          status?: "open" | "answered" | "resolved" | "dismissed" | "pending";
           created_at?: string;
           updated_at?: string;
         };
@@ -217,7 +235,7 @@ export type Database = {
           category?: "roles" | "nfr" | "edge_case" | "integration" | "security" | "scope" | "data" | "workflow";
           priority?: "low" | "medium" | "high" | "critical";
           answer_text?: string | null;
-          status?: "open" | "answered" | "resolved" | "dismissed";
+          status?: "open" | "answered" | "resolved" | "dismissed" | "pending";
           created_at?: string;
           updated_at?: string;
         };
@@ -256,7 +274,8 @@ export type Database = {
             | "done_definition"
             | "tasks"
             | "cursor_rules"
-            | "implementation_pack";
+            | "implementation_pack"
+            | "ui_kit";
           format: "md" | "json";
           version: number;
           status: "draft" | "review" | "approved" | "exported" | "superseded";
@@ -283,7 +302,8 @@ export type Database = {
             | "done_definition"
             | "tasks"
             | "cursor_rules"
-            | "implementation_pack";
+            | "implementation_pack"
+            | "ui_kit";
           format: "md" | "json";
           version: number;
           status?: "draft" | "review" | "approved" | "exported" | "superseded";
@@ -310,7 +330,8 @@ export type Database = {
             | "done_definition"
             | "tasks"
             | "cursor_rules"
-            | "implementation_pack";
+            | "implementation_pack"
+            | "ui_kit";
           format?: "md" | "json";
           version?: number;
           status?: "draft" | "review" | "approved" | "exported" | "superseded";
@@ -431,6 +452,7 @@ export type Database = {
           node_type: string;
           node_name: string;
           figma_url: string | null;
+          origin: "figma" | "synthetic" | "manual";
           raw_payload: Json;
           created_at: string;
           updated_at: string;
@@ -443,6 +465,7 @@ export type Database = {
           node_type: string;
           node_name: string;
           figma_url?: string | null;
+          origin?: "figma" | "synthetic" | "manual";
           raw_payload?: Json;
           created_at?: string;
           updated_at?: string;
@@ -455,6 +478,7 @@ export type Database = {
           node_type?: string;
           node_name?: string;
           figma_url?: string | null;
+          origin?: "figma" | "synthetic" | "manual";
           raw_payload?: Json;
           created_at?: string;
           updated_at?: string;

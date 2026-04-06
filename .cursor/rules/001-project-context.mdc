@@ -25,3 +25,8 @@ Always align decisions to:
 - Prioritize artifact quality over prompt creativity.
 - Preserve versionability of generated documents and task updates.
 - Keep human review as a hard gate before export.
+
+## Optional: Superpowers (Cursor plugin)
+- When the Superpowers plugin is enabled in Cursor, prefer its skills for multi-step work (e.g. planning before large changes, systematic debugging, verification before claiming done).
+- Rules in this repo and paths under `project-spec/` remain authoritative; Superpowers reinforces discipline, it does not replace approved specs.
+- If Superpowers is not installed, follow the same discipline using these rules and artifacts alone.

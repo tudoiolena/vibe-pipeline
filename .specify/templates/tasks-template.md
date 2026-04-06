@@ -72,6 +72,10 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] T009 Setup environment configuration management
 - [ ] T009a Establish shared Zod schemas in `packages/schema` for this feature
 - [ ] T009b If AI workflow is in scope, scaffold LangGraph state persistence with Supabase
+- [ ] T009c If intake includes a Figma URL and UI Kit / design-token specs are in scope, run Figma
+      MCP reads (`get_variable_defs`, `get_metadata` / `get_design_context`) and record resolved
+      tokens before implementation; do not leave `TBD` for MCP-resolvable color, typography, or
+      spacing
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
